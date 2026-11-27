@@ -1,5 +1,5 @@
 /** Read raster dimensions, bounds and analysis support from the source metadata API. */
-import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
+import { rasterSourceKey, rasterSourceReference } from "./raster-source.js";
 
 /** Fetch raster metadata with a 45-second timeout and an 8 MiB response limit.
  * Responses bypass HTTP caches so session-owned sources are checked by the server.

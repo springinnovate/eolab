@@ -1,6 +1,7 @@
 """Protect processing, neutral mechanisms, and existing sibling boundaries."""
 
 import ast
+from importlib.resources import files
 from pathlib import Path
 import subprocess
 import sys
@@ -290,8 +291,10 @@ def test_jobs_deployment_keeps_its_own_resource_and_filesystem_limits() -> None:
 
 def test_processing_schema_is_independent_of_catalog_storage() -> None:
     """Keep Processing tables in their own schema without pgSTAC dependencies."""
-    sql = Path("src/eolab_app/processing/schema.sql").read_text()
+    resources = files("eolab_jobs")
+    sql = resources.joinpath("schema.sql").read_text()
     assert "pgstac." not in sql.lower()
+    assert "pgstac." not in resources.joinpath("schema_check.sql").read_text().lower()
     assert "CREATE SCHEMA processing" in sql
 
 

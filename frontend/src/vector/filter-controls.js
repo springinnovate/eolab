@@ -48,7 +48,7 @@ export class VectorFilterControls {
             match: "vector-filter-match", status: "vector-filter-status", applied: "vector-filter-applied",
             count: "vector-filter-count", zoomButton: "vector-filter-zoom", cancelZoomButton: "vector-filter-zoom-cancel",
             zoomStatus: "vector-filter-zoom-status", add: "vector-filter-add", clear: "vector-filter-clear",
-            closeButton: "close-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
+            closeButton: host ? "close-vector-filter" : "close-map-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
         for (const [name, id] of Object.entries(controls)) {
             this[name] = host ? this.root.querySelector(`#${id}`) : documentContext.querySelector(`#${id}`);
             if (host) this[name].id = `${host.id}-${name}`;
@@ -57,6 +57,7 @@ export class VectorFilterControls {
             this.root.id = `${host.id}-panel`; this.root.className = "vector-filter-inline";
             this.root.setAttribute("role", "group"); this.root.removeAttribute("aria-labelledby");
             this.root.setAttribute("aria-label", "Filter features");
+            this.closeButton.hidden = false;
             this.title.hidden = this.applied.hidden = this.count.hidden = true;
             host.replaceChildren(this.root);
         }
@@ -99,7 +100,7 @@ export class VectorFilterControls {
         this.#listen(this.cancelZoomButton, "click", () => {
             this.cancelZoom("Zoom cancelled."); this.zoomButton.focus();
         });
-        this.#listen(this.closeButton, "click", () => this.close());
+        this.#listen(this.closeButton, "click", () => this.close({ focusOpener: Boolean(this.host) }));
         this.#listen(this.applyButton, "click", () => { this.#cancelTimer(); void this.#apply(); });
         this.#listen(this.cancelButton, "click", () => {
             this.attempt++;
@@ -195,8 +196,12 @@ export class VectorFilterControls {
         if (this.conditionChoices) this.conditionChoices.children[0].disabled = !target.fields.length;
     }
 
-    /** Apply pending map edits, release action preparation, hide the panel and restore focus. @return {void} */
-    close() {
+    /** Apply pending map edits, release action preparation and hide the filter editor.
+     * @param {Object} [options] Focus after dismissal.
+     * @param {boolean} [options.focusOpener=true] Return focus to the opening control. The map tab row handles focus for its own ×.
+     * @return {void}
+     */
+    close({ focusOpener = true } = {}) {
         if (this.key === null) return;
         this.cancelZoom();
         this.#clearValuePickers();
@@ -205,7 +210,7 @@ export class VectorFilterControls {
         this.key = null;
         if (this.host) this.root.hidden = true;
         else this.inspection.hideFilter();
-        if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
+        if (focusOpener && this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
     }
 
     /** Detach panel listeners and cancel timers on teardown. @return {void} */

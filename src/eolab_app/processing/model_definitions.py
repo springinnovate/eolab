@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializeAsAny,
+    StrictBool,
     ValidationError,
     ValidationInfo,
     field_serializer,
@@ -305,8 +306,22 @@ class SummaryExpressionParameter(ModelSchema):
         return self
 
 
+class BooleanParameter(ModelSchema):
+    """Offer a checkbox whose checked and unchecked states are saved as booleans.
+
+    Attributes:
+        type: The literal string "boolean", selecting a native checkbox.
+        label: User-facing name in setup and in saved runs.
+        default: Value used when a submission omits this setting.
+    """
+
+    type: Literal["boolean"]
+    label: Label
+    default: StrictBool
+
+
 Parameter = Annotated[
-    NumericParameter | ChoiceParameter | SummaryExpressionParameter,
+    NumericParameter | ChoiceParameter | SummaryExpressionParameter | BooleanParameter,
     Field(discriminator="type"),
 ]
 

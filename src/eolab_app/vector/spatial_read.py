@@ -1,4 +1,4 @@
-"""Pass original sources and selected feature IDs between a request and its native Jobs worker."""
+"""Exchange original-source descriptors and feature results with a request's native Jobs worker."""
 
 from contextlib import contextmanager
 from collections.abc import Iterator
@@ -12,8 +12,10 @@ from eolab_app.catalog_selection import FeatureMatches, ResolvedCatalogSelection
 
 if TYPE_CHECKING:
     from eolab_app.feature_intersection import IntersectionLayer
+    from eolab_app.vector.lasso import LassoRead
 
 SPATIAL_READ_URL = "http://app:8000/api/vector-sampling/spatial-read"
+INTERSECTION_SECONDS = 20
 
 
 @dataclass
@@ -22,6 +24,7 @@ class SpatialRead:
 
     inputs: dict[str, Any]
     result: FeatureMatches | None = None
+    lasso: "LassoRead | None" = None
 
 
 class SpatialReads:
@@ -32,10 +35,20 @@ class SpatialReads:
         self._reads: dict[str, SpatialRead] = {}
 
     @contextmanager
-    def hold(self, inputs: dict[str, Any]) -> Iterator[tuple[str, SpatialRead]]:
-        """Yield a temporary worker credential and remove it when the source read ends."""
+    def hold(
+        self, inputs: dict[str, Any], *, lasso: "LassoRead | None" = None
+    ) -> Iterator[tuple[str, SpatialRead]]:
+        """Keep inputs and staged output accessible until the native job exits.
+
+        Args:
+            inputs: Authorized descriptors or retained filter IDs for this job.
+            lasso: Recipient of staged Lasso results, when requested.
+
+        Yields:
+            A temporary worker credential and its request-owned read.
+        """
         token = token_hex(32)
-        read = self._reads[token] = SpatialRead(inputs)
+        read = self._reads[token] = SpatialRead(inputs, lasso=lasso)
         try:
             yield token, read
         finally:

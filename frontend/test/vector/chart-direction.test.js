@@ -87,6 +87,9 @@ for (const chartType of ["line", "scatter", "bar"]) {
             onFeatureZoom() { return true; },
         });
         controller.setCurrentObservation(observation({ depth_2_cm: 0, depth_8_cm: -7, depth_26_cm: 11 }));
+        controller.open();
+        const showValues = () => documentContext.querySelector("#vector-feature-profile-values-button").dispatchEvent(new Event("click"));
+        const showPlot = () => documentContext.querySelector("#vector-feature-profile-plot-button").dispatchEvent(new Event("click"));
         change(documentContext, "#vector-feature-profile-chart-type", chartType);
         const chart = documentContext.querySelector("#vector-feature-profile-chart");
         const table = documentContext.querySelector("#vector-feature-profile-table-body");
@@ -97,19 +100,21 @@ for (const chartType of ["line", "scatter", "bar"]) {
         change(documentContext, "#vector-feature-profile-direction", "descending");
         assertSpacing(positions(chart), 1 / 3);
         assert.deepEqual(axisLabels(chart), ["26", "8", "2"]);
-        assert.deepEqual(table.children.map(row => [row.children[0].children[0].textContent, ...row.children.slice(1).map(cell => cell.textContent)]), [
-            ["depth_26_cm", "26", "11"], ["depth_8_cm", "8", "-7"], ["depth_2_cm", "2", "0"],
-        ]);
         assert.deepEqual(chart.querySelectorAll(".series-chart-point").map(point => point.getAttribute("cy")), ascendingY.toReversed());
         assert.deepEqual(chart.querySelectorAll(".series-chart-point").map(point => point.getAttribute("aria-label")), [
             "depth_26_cm: 11", "depth_8_cm: -7", "depth_2_cm: 0",
         ]);
+        showValues();
+        assert.deepEqual(table.children.map(row => [row.children[0].children[0].textContent, ...row.children.slice(1).map(cell => cell.textContent)]), [
+            ["depth_26_cm", "26", "11"], ["depth_8_cm", "8", "-7"], ["depth_2_cm", "2", "0"],
+        ]);
 
         controller.setCurrentObservation(observation({ depth_2_cm: 0, depth_8_cm: null, depth_26_cm: 11 }));
+        assert.equal(table.children[1].children[2].textContent, "No value");
+        showPlot();
         const withGap = positions(chart);
         assert.equal(withGap.length, 2);
         assert.ok(withGap[0] < withGap[1]);
-        assert.equal(table.children[1].children[2].textContent, "No value");
         assert.match(documentContext.querySelector("#vector-feature-profile-status").textContent, /One field has no numeric value/);
         if (chartType === "line") assert.doesNotMatch(chart.querySelector(".series-chart-line").getAttribute("d"), /L/);
 
@@ -118,10 +123,12 @@ for (const chartType of ["line", "scatter", "bar"]) {
         documentContext.querySelector("#vector-feature-profile-select-matching").dispatchEvent(new Event("click"));
         assertSpacing(positions(chart), 1);
         assert.deepEqual(axisLabels(chart), ["total_CO2", "stored_CO2", "annual_CO2"]);
+        showValues();
         assert.deepEqual(table.children.map(row => row.children[1].textContent), ["total_CO2", "stored_CO2", "annual_CO2"]);
         change(documentContext, "#vector-feature-profile-direction", "ascending");
-        assertSpacing(positions(chart), 1);
         assert.deepEqual(table.children.map(row => row.children[1].textContent), ["annual_CO2", "stored_CO2", "total_CO2"]);
+        showPlot();
+        assertSpacing(positions(chart), 1);
         controller.destroy();
     });
 
@@ -142,6 +149,9 @@ for (const chartType of ["line", "scatter", "bar"]) {
             observation({ depth: 14, score: null, site: "Delta" }, "missing"),
         ];
         controller.setSample({ state: "ready", observations: samples, message: "Ready" });
+        controller.open();
+        const showValues = () => documentContext.querySelector("#vector-time-series-values-button").dispatchEvent(new Event("click"));
+        const showPlot = () => documentContext.querySelector("#vector-time-series-plot-button").dispatchEvent(new Event("click"));
         const find = documentContext.querySelector("#vector-time-series-field-search");
         find.value = "score";
         documentContext.querySelector("#vector-time-series-select-matching").dispatchEvent(new Event("click"));
@@ -155,10 +165,12 @@ for (const chartType of ["line", "scatter", "bar"]) {
         change(documentContext, "#vector-time-series-direction", "descending");
         assertSpacing(positions(chart), 1 / 3);
         assert.deepEqual(axisLabels(chart), ["26", "14", "8", "2"]);
+        showValues();
         assert.deepEqual(table.children.map(row => [row.children[0].children[0].textContent, row.children[0].textContent, row.children[1].children[0].textContent]), [
             ["Depth observations · deep", "26", "11"], ["Depth observations · missing", "14", "No value"],
             ["Depth observations · middle", "8", "-7"], ["Depth observations · shallow", "2", "0"],
         ]);
+        showPlot();
         assert.match(documentContext.querySelector("#vector-time-series-first").children.at(-1).textContent, /1 feature lacks/);
         const points = chart.querySelectorAll(".series-chart-point");
         points[0].dispatchEvent(new Event("click"));
@@ -180,10 +192,12 @@ for (const chartType of ["line", "scatter", "bar"]) {
         change(documentContext, "#vector-time-series-x", "site");
         assertSpacing(positions(chart), 1 / 2);
         assert.deepEqual(axisLabels(chart), ["Gamma", "Delta", "Beta", "Alpha"]);
+        showValues();
         assert.deepEqual(table.children.map(row => row.children[0].textContent), ["Gamma", "Delta", "Beta", "Alpha"]);
         change(documentContext, "#vector-time-series-direction", "ascending");
-        assertSpacing(positions(chart), 2);
         assert.deepEqual(table.children.map(row => row.children[0].textContent), ["Alpha", "Beta", "Delta", "Gamma"]);
+        showPlot();
+        assertSpacing(positions(chart), 2);
         change(documentContext, "#vector-time-series-x", "depth");
         assertSpacing(positions(chart), 3);
         controller.destroy();

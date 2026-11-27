@@ -25,6 +25,7 @@ from eolab_app.raster.geographic_bounds import (
     normalize_wgs84_bounds,
     transform_bounds_to_wgs84,
 )
+from eolab_app.raster.geotiff_crs import GeoTiffReader
 
 
 STAC_RASTER_DATA_TYPES = {
@@ -80,7 +81,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         tz=timezone.utc,
     )
 
-    with rasterio.open(geotiff_path) as dataset:
+    with rasterio.Env(), GeoTiffReader(geotiff_path) as dataset:
         if dataset.crs is None:
             raise ValueError("GeoTIFF has no coordinate reference system")
         if dataset.width < 1 or dataset.height < 1:
@@ -145,10 +146,10 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
                          ("EOLAB_SOURCE", "eolab:source_url")):
             if value := tags.get(tag):
                 properties[key] = value
-        if epsg_code := dataset.crs.to_epsg():
+        if epsg_code := dataset.crs.to_epsg(confidence_threshold=100):
             properties["proj:epsg"] = epsg_code
         else:
-            properties["proj:wkt2"] = dataset.crs.to_wkt()
+            properties["proj:wkt2"] = dataset.crs.to_wkt(version="WKT2_2019")
 
         raster_bands = []
         for band_index, (data_type, nodata_value) in enumerate(zip(

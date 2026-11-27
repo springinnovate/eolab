@@ -60,6 +60,7 @@ export class AnnotationController {
         this.model = new AnnotationModel();
         this.shared = new Map();
         this.controls = new Map();
+        this.styleEditingEnabled = true;
         this.layers = new Map();
         this.inspectionMatches = [];
         this.inspectedPolygon = null;
@@ -395,6 +396,7 @@ export class AnnotationController {
             }),
             opacity: opacity => this.mapLayers.setOpacity(key, opacity),
         });
+        controls.setStyleEditingEnabled(this.styleEditingEnabled);
         const displayLayer = Object.create(layer);
         Object.defineProperty(displayLayer, "polygons", { get: () => this.displayLayer(layer).polygons });
         const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer, this.labelLayout);
@@ -801,6 +803,7 @@ export class AnnotationController {
      * @return {boolean} Whether annotations handled this intent.
      */
     openControls(key, action) {
+        if (action === "style" && !this.styleEditingEnabled) return false;
         const record = this.mapLayers.getRecord(key);
         if (record?.entry.item !== null) return false;
         const controls = this.controls.get(record?.state?.id);
@@ -809,6 +812,15 @@ export class AnnotationController {
         this.panel.showLayer(key);
         controls.open(action);
         return true;
+    }
+
+    /** Apply the map's style choice to current and subsequently attached drawings.
+     * @param {boolean} enabled Whether users may change drawing colors, outlines, labels and opacity.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleEditingEnabled = enabled;
+        for (const controls of this.controls.values()) controls.setStyleEditingEnabled(enabled);
     }
 
     /**

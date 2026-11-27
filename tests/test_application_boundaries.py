@@ -147,8 +147,8 @@ def test_application_root_has_no_generic_shared_module() -> None:
     }.intersection(ROOT_GENERIC_MODULE_NAMES)
 
 
-def test_job_client_and_listener_dependencies() -> None:
-    """Keep client and listener imports and configuration independent of features."""
+def test_shared_jobs_package_dependencies() -> None:
+    """Keep shared Jobs modules independent of application features and process settings."""
     package = Path("src/eolab_jobs")
     client_dependencies = {
         "asyncio",
@@ -162,13 +162,13 @@ def test_job_client_and_listener_dependencies() -> None:
         "pydantic",
         "eolab_jobs",
     }
-    for path, allowed in (
-        (package / "__init__.py", client_dependencies),
-        (package / "client.py", client_dependencies),
-        (package / "job_notifications.py", sys.stdlib_module_names | {"psycopg"}),
-    ):
+    module_dependencies = {
+        "job_notifications.py": sys.stdlib_module_names | {"psycopg"},
+        "worker_claim.py": client_dependencies | {"contextlib", "psycopg"},
+    }
+    for path in package.rglob("*.py"):
         roots = {name.split(".")[0] for name in imported_modules(path)}
-        assert roots <= allowed, path
+        assert roots <= module_dependencies.get(path.name, client_dependencies), path
         assert not reads_process_environment(path)
     assert "eolab_jobs.client" in imported_modules(
         APPLICATION_SOURCE / "vector" / "outline_jobs.py"

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelOutputLayers, artifactLayerKey } from "../src/model-output-preview/controller.js";
 import { readArtifactPreview, validateArtifactPreview } from "../src/model-output-preview/api.js";
 import { fileManifest, job } from "../test-support/models/fixtures.js";
-import { describeRasterSource } from "../src/raster/source-api.js";
+import { describeRasterSource } from "../src/raster-source-api.js";
 
 /** Compose display ownership against explicit map and HTTP boundary fakes.
  * @param {Object} [overrides={}] Optional transport replacements.

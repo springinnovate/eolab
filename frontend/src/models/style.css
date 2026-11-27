@@ -9,10 +9,11 @@
 }
 #models-panel h2 { font-size: 1rem; margin: 0; }
 #models-panel h3 { font-size: 1rem; margin: 0 0 6px; }
-.models-header > .analysis-panel-close { align-self: center; }
 .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .models-field { display: grid; gap: 3px; min-width: 0; font-size: var(--font-size-ui); }
 #models-panel input, #models-panel select, #models-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
+.models-boolean { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+#models-panel .models-boolean input { order: -1; width: auto; padding: 0; margin: 0; accent-color: var(--brand-hover); }
 #models-panel textarea { font-family: monospace; resize: vertical; }
 .models-form fieldset { display: grid; gap: 8px; border: 0; padding: 0; margin: 10px 0; min-width: 0; }
 .models-form legend { padding: 0; font-weight: 600; }
@@ -28,15 +29,26 @@
 .models-vector-row-remove { justify-self: end; }
 .models-vector-row-remove:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .models-vector-row-add { justify-self: start; }
+.models-formula-layers { display: grid; gap: 8px; }
+.models-form .models-formula-row { gap: 6px 8px; margin: 0; padding: 6px 8px 8px; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.models-formula-row, .models-formula-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 6px 8px; }
+.models-formula-row :is(p, button), .models-formula-grid > :first-child { grid-column: 1 / -1; }
+.models-formula-row button { justify-self: end; }
+.models-formula-insert { display: flex; flex-wrap: wrap; gap: 4px; }
+.models-formula-insert button { font-family: monospace; }
 .models-spatial-reference { padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius); }
 .models-habitat-datasets { display: grid; gap: 6px; font-size: var(--font-size-ui); line-height: 1.35; }
 .models-habitat-datasets .models-details { margin: 0; font-size: inherit; }
-.models-habitat-datasets ul { display: grid; gap: 4px; list-style: none; margin: 6px 0 0; padding: 0; }
-.models-habitat-datasets li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.models-habitat-datasets ul { display: grid; gap: 8px; list-style: none; margin: 6px 0 0; padding: 0; }
+.models-habitat-datasets li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 2px 8px; }
 .models-habitat-dataset-choice { display: flex; align-items: start; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 #models-panel .models-habitat-dataset-choice input { width: auto; padding: 0; margin: 2px 0 0; flex: none; }
 .models-habitat-dataset-required { display: block; color: var(--text-2); font-size: var(--font-size-support); }
 .models-habitat-datasets a { overflow-wrap: anywhere; }
+.models-habitat-dataset-details { grid-column: 1 / -1; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; white-space: pre-line; }
+.models-habitat-map-choice { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.models-habitat-map-choice select { flex: 1 1 10rem; min-width: 0; max-width: 100%; }
+.models-habitat-map-choice .models-help { flex-basis: 100%; }
 .models-tool {
   display: block;
   width: 100%;

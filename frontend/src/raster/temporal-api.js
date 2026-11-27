@@ -6,7 +6,7 @@
  * @param {string} variable Published variable identifier.
  * @param {string} [month] Requested UTC month, such as "2000-01"; omitted chooses the latest available month.
  * @param {AbortSignal} [signal] Cancellation for an obsolete control selection.
- * @return {Promise<{months:string[],month:string,times:string[]}>} Available coordinate choices.
+ * @return {Promise<{months:string[],month:string,times:string[],interval_starts?:Object<string,string>}>} Populated browsing months, exact selection keys and inclusive starts for explicit ranges.
  * @throws {Error} If discovery fails or the request is cancelled.
  */
 export async function loadTemporalTimes(item, variable, month, signal) {

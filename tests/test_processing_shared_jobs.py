@@ -28,6 +28,71 @@ from test_processing_jobs import boundary, store, clip_inputs, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
 
 
+@pytest.mark.parametrize(
+    ("membership", "next_owner"),
+    [("cancel_before", "a"), ("cancel_after", "c"), ("join_after", "a")],
+)
+def test_only_subscribers_present_at_start_take_a_fair_turn(
+    store: PostgresJobStore, membership: str, next_owner: str
+) -> None:
+    """Order later claims by the subscribers actually served at each start.
+
+    Args:
+        store: Disposable PostgreSQL job store.
+        membership: When owner A joins or cancels relative to the shared start.
+        next_owner: Owner due the next turn after C and the shared job have run.
+    """
+    private = PreparedJobPlan({}, {}, operation="test.v1")
+    shared = PreparedJobPlan({}, {}, operation="test.v1", work_key="shared")
+    store.submit("c", "prior", private, "prior")
+    first = store.claim_next_job()
+    assert store.finish(first["id"], first["attempt_id"], None)
+    original = store.submit("b", "shared", shared, "shared")
+    if membership != "join_after":
+        handle = store.submit("a", "shared", shared, "shared")
+        if membership == "cancel_before":
+            store.cancel(handle["id"], "a")
+    started = store.claim_next_job()
+    assert started["id"] == original["job_id"]
+    if membership == "cancel_after":
+        store.cancel(handle["id"], "a")
+    if membership == "join_after":
+        joined = store.submit("a", "shared", shared, "shared")
+        assert joined["job_id"] == started["id"]
+    assert store.finish(started["id"], started["attempt_id"], None)
+    for owner in ("a", "c"):
+        store.submit(owner, "next", private, "next")
+    assert store.claim_next_job()["owner"] == next_owner
+
+
+@pytest.mark.parametrize("private_owner", ["joining", "another"])
+def test_joining_shared_work_keeps_submission_order(
+    store: PostgresJobStore, private_owner: str
+) -> None:
+    """Schedule requests by when each session subscribed to the queued work.
+
+    Args:
+        store: Disposable PostgreSQL job store.
+        private_owner: Exercise FIFO within a session or between two newcomers.
+    """
+    shared = PreparedJobPlan({}, {}, operation="test.v1", work_key="shared")
+    original = store.submit("original", "shared", shared, "shared")
+    private = store.submit(
+        private_owner,
+        "private",
+        PreparedJobPlan({}, {}, operation="test.v1"),
+        "private",
+    )
+    joined = store.submit("joining", "shared", shared, "shared")
+    assert joined["job_id"] == original["job_id"]
+    store.cancel(original["id"], "original")
+
+    for expected in (private, joined):
+        claim = store.claim_next_job()
+        assert (claim["id"], claim["owner"]) == (expected["job_id"], expected["owner"])
+        assert store.finish(claim["id"], claim["attempt_id"], None)
+
+
 def test_concurrent_subscribers_share_one_claim_and_published_result(
     store: PostgresJobStore,
 ) -> None:
@@ -405,5 +470,7 @@ def test_cancellation_racing_a_new_subscriber_keeps_new_work_live(
         assert cancelled.result()["status"] == "cancelled"
         two = joined.result()
     assert store.get(two["id"], "second")["status"] == "queued"
-    assert store.claim_next_job()["id"] == two["job_id"]
+    claimed = store.claim_next_job()
+    assert claimed["id"] == two["job_id"]
+    assert claimed["owner"] == "second"
     assert store.claim_next_job() is None

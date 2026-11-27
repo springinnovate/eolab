@@ -1,5 +1,7 @@
 /** Describe immutable inspected observations and validate map navigation targets. */
 
+/** @typedef {"inspection"|"labels"} VectorInspectionChange A new inspection or selection, or a display-name edit to the same observations. */
+
 /**
  * Immutable scalar-only record constructed by the feature inspector and passed
  * through composition to chart consumers. Consumers trust this producer contract.
@@ -7,22 +9,40 @@
  * @property {string} sourceId Layer identifier supplied by the application.
  * @property {string} layerLabel User-facing source layer or filename.
  * @property {string|number|null} featureId Source feature identifier, or null if absent.
- * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}} focus
+ * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}|null} focus
  * Feature center and optional WGS 84 bounds; full geometry is not included.
  * Without bounds the center preserves click context and must not be used for zoom.
- * @property {Readonly<Record<string,string|number|boolean|null>>} properties
- * Feature attributes limited to strings, numbers, booleans and null.
+ * Attribute-only Lasso selections have null focus; no point is invented for a feature.
+ * @property {Readonly<Record<string,string|number|bigint|boolean|null>>} properties
+ * Scalar feature attributes. Integers outside the safe Number range retain their exact value as bigint.
  */
+
+/**
+ * Check whether an inspected reading can be plotted as a number.
+ * @param {unknown} value Original scalar reading.
+ * @return {boolean} Whether the reading is a finite number or exact integer.
+ */
+export function isNumericFeatureValue(value) {
+    return typeof value === "bigint" || Number.isFinite(value);
+}
 
 /**
  * Bounded observations and presentation state from one vector inspection.
  * @typedef {Object} VectorInspectionSample
- * @property {"loading"|"ready"|"empty"|"invalidated"} state Inspection status.
+ * @property {"loading"|"ready"|"empty"|"invalidated"|"interrupted"} state
+ * An interrupted inspection retains only observations received before dismissal.
  * @property {ReadonlyArray<VectorInspectionObservation>} observations Features in inspector order.
  * @property {string} message User-facing inspection status.
  * @property {number} failedLayers Inspected layers that returned an error.
  * @property {Readonly<{lng:number,lat:number}>|null} position
- * Map point associated with the observations, or null after invalidation.
+ * Map point associated with the observations, or null for Lasso or after invalidation.
+ */
+
+/**
+ * A rename preserves each feature's position in the active selection. Restoring a
+ * nonempty history entry also supplies its active feature's zero-based position.
+ * Ordinary inspection results replace the selection without either hint.
+ * @typedef {VectorInspectionChange|{kind:"restore",featureIndex:number}} VectorInspectionUpdate
  */
 
 /**

@@ -499,6 +499,25 @@ test("CatalogSearchClient invokes fetch with the global receiver", async () => {
   assert.equal(invocationReceiver, globalThis);
 });
 
+test("Catalog raster title lookup uses exact titles and includes later matches", async () => {
+  const requests = [];
+  const client = new CatalogSearchClient("/stac", async (url, options) => {
+    requests.push({url, options});
+    return itemCollectionResponse({...emptyItemCollection, numberMatched: 2,
+      features: [{id: requests.length}],
+      links: requests.length === 1 ? [{rel: "next", href: "/stac/search?token=next"}] : [],
+    });
+  });
+  const titles = ["NDVI median (assessment year 2018)", "Rainfall variability (assessment year 2018)"];
+  const items = await client.findRasterTitles(titles, new AbortController().signal);
+  assert.deepEqual(items, [{id: 1}, {id: 2}]);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    collections: ["eolab-mounted-geotiffs"], limit: 2, "filter-lang": "cql2-json",
+    filter: {op: "or", args: titles.map(title => ({op: "=", args: [{property: "title"}, title]}))},
+  });
+  assert.equal(requests[1].url, "/stac/search?token=next");
+});
+
 test("CatalogSearchClient follows the provider pagination contract", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient(

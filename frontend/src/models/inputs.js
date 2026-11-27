@@ -3,9 +3,9 @@ import { getModelSetupIntegration } from "./model-setup.js";
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 import { getModelInputHandler } from "./input-handlers.js";
-import { rasterSourceReference } from "../raster-source.js";
+import { captureModelRaster, modelSourceKey } from "./raster-input.js";
 import { captureMapViewportArea as modelViewportArea } from "../selected-area.js";
-export { modelViewportArea };
+export { captureModelRaster, modelSourceKey, modelViewportArea };
 
 /** @typedef {{key:string,label:string,polygons:Array<{type:"Polygon",coordinates:number[][][]}>,total:number}} DrawnPolygonLayer */
 
@@ -24,14 +24,20 @@ export { modelViewportArea };
  */
 export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
 
-/** Identify a raster or vector choice without using its label or map visibility.
- * @param {Object} source Catalog identity, uploaded vector or raster identity, or owned run-file reference.
- * @return {string} Composite identity for a choice list.
+/** Report whether a recipe can use committed drawn polygon layers.
+ * @param {Object} model Installed recipe.
+ * @return {boolean} Whether to request polygon drawings from browser composition.
  */
-export function modelSourceKey(source) {
-    return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId]
-        : source.kind === "uploadedRaster" ? [source.kind, source.uploadId]
-        : source.uploadId ? ["upload", source.uploadId] : [source.collectionId, source.itemId]);
+export function modelSupportsDrawnAreas(model) {
+    return model.id === "habitat-condition" || modelHasInput(model, "explicit_area");
+}
+
+/** Report whether the shared area picker owns this input.
+ * @param {string} type Recipe input type.
+ * @return {boolean} Whether to use ordinary spatial input controls.
+ */
+export function isModelSpatialInput(type) {
+    return ["summary_area", "clip_area", "explicit_area", "mask_source", "habitat_references"].includes(type);
 }
 
 /** List unexpired raster outputs available as inputs to another model run.
@@ -68,22 +74,18 @@ export function getModelRasterFields(draft) {
     return fields;
 }
 
-/** Capture an available raster choice using the ordinary path-free source contract.
- * @param {Object|null} raster Selected map raster, uploaded raster or owned run result.
- * @param {Object[]} sources Current source choices in this model setup.
- * @param {string} [type="raster"] Input type; catalog_raster and mask_source exclude run results.
- * @return {Object} Path-free original raster identity.
- * @throws {Error} If the source is absent, expired or ineligible for this input.
+/** List selected raster sources so the existing observer can follow their runs.
+ * Input handlers resolve their own bindings without exposing mutable field layouts.
+ * @param {Object} draft Model setup with named input state.
+ * @return {Object[]} Selected source metadata, excluding empty choices.
  */
-export function captureModelRaster(raster, sources, type = "raster") {
-    const startingMask = type === "mask_source";
-    if (!raster || !sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
-        throw new Error(startingMask ? "Choose a starting raster from Map contents." : "Choose a raster from Map contents or a completed run.");
-    if ((type === "catalog_raster" || startingMask) && raster.kind === "runArtifact")
-        throw new Error(startingMask ? "Choose a starting raster from Map contents." : "This recipe requires a raster from Map contents.");
-    if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
-        throw new Error("This raster is no longer available. Choose another input.");
-    return rasterSourceReference(raster);
+export function getModelRasterSources(draft) {
+    const sources = getModelRasterFields(draft).map(({state, field}) => state[field]).filter(Boolean);
+    for (const [name, definition] of Object.entries(draft.model.inputs)) {
+        const handler = getModelInputHandler(definition.type);
+        if (handler?.getRasterSources) sources.push(...handler.getRasterSources(draft.inputs[name]));
+    }
+    return sources;
 }
 
 /** Explain the saved polygon selection without exposing server paths.
@@ -116,6 +118,7 @@ export function modelAreaInput(area) {
  */
 export function modelSupportsArea(type, area) {
     const supportedAreaKinds = type === "clip_area" ? ["selectedArea", "samplingBox", "catalogSelection", "polygonGroup"] :
+        type === "explicit_area" ? ["selectedArea", "samplingBox", "catalogSelection", "polygonArea"] :
         type === "summary_area" ? ["selectedArea", "samplingBox", "catalogSelection", "wholeRaster", "polygonArea"] :
             type === "habitat_references" ? ["catalogSelection", "polygonArea"] : type === "mask_source" ? ["catalogSelection"] : [];
     return supportedAreaKinds.includes(area?.kind);
@@ -159,7 +162,7 @@ export function selectedDrawnPolygonLayer(draft, input) {
  * Models with a starting mask require the user to choose that mask explicitly.
  * Registered model setup owns specialized initial choices and cross-input state.
  * @param {Object} model Installed recipe.
- * @param {Object & {drawnPolygonLayers?:DrawnPolygonLayer[]}} context Catalog and map choices supplied by browser composition, with detached drawn layers for Ecosystem Condition.
+ * @param {Object & {drawnPolygonLayers?:DrawnPolygonLayer[]}} context Catalog and map choices supplied by browser composition, with detached drawn layers for tools that accept them.
  * @param {string} id Local draft identity.
  * @param {import("./model-setup.js").ModelSetupIntegration|null} [integration] Registered setup owner or explicit ordinary setup.
  * @return {Object} Draft with field state in inputs[name], shared source choices,
@@ -187,7 +190,7 @@ export function createModelDraft(model, context, id, integration = getModelSetup
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
                 copiedFromRun: false,
             };
-        } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
+        } else if (isModelSpatialInput(input.type)) {
             const explicitSelection = ["mask_source", "habitat_references"].includes(input.type);
             let area = explicitSelection ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
             let areaMode = explicitSelection ? "vector" : ({wholeRaster: "whole", selectedArea: "samplingArea", samplingBox: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
@@ -207,7 +210,7 @@ export function createModelDraft(model, context, id, integration = getModelSetup
     }
     return {id, model, label: model.title, sources, inputs, integration,
         setupState: integration?.createState(model, inputs, context, {viewportArea: modelViewportArea}) ?? null,
-        drawnPolygonLayers: model.id === "habitat-condition" ? context.drawnPolygonLayers ?? [] : [],
+        drawnPolygonLayers: modelSupportsDrawnAreas(model) ? context.drawnPolygonLayers ?? [] : [],
         temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], statisticType,
             statisticType === "temporal_reduction" ? model.steps[0].inputs.precipitation.value : null) : null,
         reduction: statisticType ? {reducer: "mean", percentile: 90} : null,
@@ -239,7 +242,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;
-        else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
+        else if (isModelSpatialInput(input.type)) {
             if (state.selecting) throw new Error("Wait for the selected features to finish loading.");
             const startingMask = input.type === "mask_source";
             const references = input.type === "habitat_references";
@@ -269,6 +272,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     }
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
+        if (parameter.type === "boolean" && typeof value !== "boolean") throw new Error("Choose a value for " + parameter.label + ".");
         if (parameter.type === "choice" && !parameter.choices.some(choice => choice.value === value))
             throw new Error(`Choose an available option for ${parameter.label}.`);
         if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");

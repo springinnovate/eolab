@@ -1,0 +1,2 @@
+# Upstream input for the D8 precision wheel built by build-pyflwdir.py.
+pyflwdir==0.6.0 --hash=sha256:33ffaa55082fa82d6b3bfc68cbb8aaf8d4b81981d587f8ddf5b176c81813eabc

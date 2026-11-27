@@ -28,7 +28,54 @@ from eolab_app.processing.raster_aggregate import calculate_raster_statistics_fo
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from raster_aggregate_support import LIMITS as AGGREGATE_LIMITS, make_spec
+from raster_fixture_support import write_source
 from test_prepared_hydrology import prepare_sources
+
+
+@pytest.mark.parametrize(
+    ("dtype", "nodata", "samples", "expected"),
+    [
+        ("uint64", None, (2**64 - 1, 7), (2**64 - 1, 7)),
+        ("int64", 2**54, (2**54 - 1, 2**54, 2**54 + 1), (2**54 - 1, 0, 2**54 + 1)),
+    ],
+    ids=("uint64-maximum", "int64-nodata-neighbors"),
+)
+def test_packaged_model_preserves_64bit_population(
+    tmp_path: Path,
+    dtype: str,
+    nodata: int | None,
+    samples: tuple[int, ...],
+    expected: tuple[int, ...],
+) -> None:
+    """Check that the installed wwf_es_beneficiaries wheel retains exact 64-bit pixels.
+
+    Args:
+        tmp_path: Directory for the population, coverage and masked GeoTIFFs.
+        dtype: Native signed or unsigned integer type of the population band.
+        nodata: Value declared missing by the source, if any.
+        samples: Population row inside the coverage grid.
+        expected: Output row with excluded samples set to zero.
+    """
+    from eolab_app.processing.downstream_runner import load_beneficiaries
+
+    values = np.array([samples], dtype=dtype)
+    population = write_source(tmp_path / "population.tif", values, nodata=nodata)
+    coverage = write_source(
+        tmp_path / "coverage.tif", np.ones(values.shape, dtype="uint8")
+    )
+    output = tmp_path / "masked.tif"
+    total = load_beneficiaries().mask_population_with_coverage(
+        population, coverage, output
+    )
+    expected_values = np.array([expected], dtype=dtype)
+    with rasterio.open(output) as masked:
+        assert masked.dtypes == (dtype,)
+        assert masked.nodata == 0
+        np.testing.assert_array_equal(masked.read(1), expected_values)
+        np.testing.assert_array_equal(
+            masked.read_masks(1), np.where(expected_values > 0, 255, 0)
+        )
+    assert total == float(sum(expected))
 
 
 def scaled_downstream_fixture(
@@ -267,7 +314,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "3f577e27deb347cd4520977eb99474fb81e990fc"
+        == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -420,13 +467,23 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert saved["beneficiariesRevision"] == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
         )
         == saved
     )
+    for previous_revision in (
+        "3f577e27deb347cd4520977eb99474fb81e990fc",
+        "2efb9330acd1deb6ff3cfafc38a90ac72aa069b9",
+        "afb977dd0e923e465958f8b301060c4ff10c8fd7",
+        "eda4acec984ec7b40cb9d745a818773418fa2d68",
+        "f204f4ad6277e381d5bf902da9d5c50655ffbf16",
+    ):
+        saved["beneficiariesRevision"] = previous_revision
+        restored = ClosedEdgeDownstreamNumericalPolicy.model_validate(saved)
+        assert restored.beneficiariesRevision == previous_revision
 
 
 def test_saved_model_settings_reach_downstream_execution(
@@ -662,11 +719,13 @@ def test_filtered_vectors_form_one_mask_without_expanded_seeds(tmp_path: Path) -
 
 
 def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) -> None:
-    """Execute YAML-configured pit filling and publish its results and numerical policy.
+    """Publish the configured pit-filling results and export the run's recorded model revision.
 
     Args:
         tmp_path: Isolated catalog and owned artifact fixtures.
     """
+    from pydantic import ValidationError
+
     from eolab_app.processing.artifacts import LocalJobArtifacts
     from eolab_app.processing.worker import ProcessingWorker
     from eolab_app.processing.native_processes import create_native_process
@@ -843,7 +902,27 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
     assert policy["pitFillSearchLimit"] == 17
     assert policy["pitFillTreatNodataAsClosed"] is True
+    assert policy["beneficiariesRevision"] == provenance["beneficiariesRevision"]
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
+
+    # A run finished on a newer build before this installation served the download.
+    recorded_revision = "0123456789abcdef0123456789abcdef01234567"
+    saved_policy = ready["retained_metadata"]["execution"]["numericalPolicy"]
+    saved_policy["beneficiariesRevision"] = recorded_revision
+    exported = parse_yaml(export_model_job_yaml(ready, run=True), run=True)
+    assert (
+        exported["execution"]["numericalPolicy"]["beneficiariesRevision"]
+        == recorded_revision
+    )
+
+    for invalid_revision in (
+        recorded_revision[:7],
+        recorded_revision.upper(),
+        "g" * 40,
+    ):
+        saved_policy["beneficiariesRevision"] = invalid_revision
+        with pytest.raises(ValidationError, match="beneficiariesRevision"):
+            export_model_job_yaml(ready, run=True)
 
 
 def test_cancel_reaps_real_downstream_native_work_before_cleanup(

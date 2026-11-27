@@ -19,13 +19,22 @@ let clipSerial = 0;
  */
 
 /**
+ * Check a constructed chart domain before the scale converts it to SVG positions.
+ * @param {number[]} domain Two endpoints after bounds and chart padding are applied.
+ * @return {boolean} Whether both endpoints and their separation are finite.
+ */
+function isFiniteChartDomain(domain) {
+    return domain.every(Number.isFinite) && Number.isFinite(domain[1] - domain[0]);
+}
+
+/**
  * Return compact finite-number text for axes and accessible details.
  *
- * @param {number} value Finite number.
- * @return {string} Compact localized value.
+ * @param {number|bigint} value Finite number or exact integer.
+ * @return {string} Compact localized number or the full digits of an exact integer.
  */
 export function formatSeriesNumber(value) {
-    return NUMBER_FORMAT.format(value);
+    return typeof value === "bigint" ? String(value) : NUMBER_FORMAT.format(value);
 }
 
 /**
@@ -98,19 +107,21 @@ function bindSeriesPointSelection(mark, select) {
  * @param {number} [configuration.height=360] SVG height in screen pixels; explicit tick fonts can add caption space without shrinking the plot.
  * @param {number} [configuration.pointSize=9] Marker diameter in screen pixels.
  * @param {number|null} [configuration.xTickCount=null] Maximum X tick labels; null adapts to chart width.
+ * @param {number} [configuration.xTickLabelLimit] Maximum characters per X tick, defaulting to 18 on compact charts and 28 otherwise.
  * @param {number} [configuration.yTickCount=5] Desired Y tick count, rounded by the numeric scale.
  * @param {boolean} [configuration.fitXAxisLabels=false] Fit the bottom margin to the displayed X ticks and title in a compact plot.
  * @param {number|null} [configuration.axisFontSize=null] Tick font size in screen pixels; axis titles are one pixel larger. Null keeps the caller's CSS.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
- * @param {string} configuration.yAxisLabel Vertical-axis title.
+ * @param {string} configuration.yAxisLabel Vertical-axis title. A top title can use newlines for full-width caption lines.
  * @param {"left"|"top"} [configuration.yAxisLabelPosition="left"] Place the Y title beside or above the plot.
+ * @param {string|null} [configuration.yAxisLabelTooltip=null] Full reference text when the visible Y title is abbreviated.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
  * @param {(point:Object,series:ChartSeries,index:number)=>string} configuration.pointAccessibleLabel Accessible point label.
  * @param {((point:Object)=>string)|null} [configuration.pointTooltip=null] Native tooltip text, required unless onInspect is supplied.
  * @param {((point:Object)=>void)|null} [configuration.onPointSelect=null]
  * Optional selection intent callback.
  * @param {((inspection:{series:ChartSeries,point:Object|null,index:number|null}|null)=>void)|null} [configuration.onInspect=null] Pointer/focus details; when supplied, replaces native tooltips.
- * @return {{pointElements:{circle:SVGElement,point:Object}[],xDomain:number[],yDomain:number[]}} Rendered handles and displayed domains, for axis editors.
+ * @return {{pointElements:{circle:SVGElement,point:Object}[],xDomain:number[],yDomain:number[]}|null} Rendered handles and axis-editor domains, or null when the constructed domains exceed finite numbers.
  * @throws {TypeError} If the chart contract or aligned positions are invalid, or no plottable value exists.
  */
 export function renderOrdinalSeriesChart({
@@ -128,12 +139,14 @@ export function renderOrdinalSeriesChart({
     height = CHART_HEIGHT,
     pointSize = 9,
     xTickCount = null,
+    xTickLabelLimit = width < 480 ? 18 : 28,
     yTickCount = 5,
     axisFontSize = null,
     fitXAxisLabels = false,
     xAxisLabel,
     yAxisLabel,
     yAxisLabelPosition = "left",
+    yAxisLabelTooltip = null,
     ariaLabel,
     pointAccessibleLabel,
     pointTooltip = null,
@@ -193,9 +206,19 @@ export function renderOrdinalSeriesChart({
     const eligible = points.map((point, index) => index).filter(index => !xBounds || numericX[index] >= xBounds[0] && numericX[index] <= xBounds[1]);
     const indexes = ordinalTickIndexes(eligible.length, xTickCount ?? (width < 480 ? 4 : 7)).map(index => eligible[index]);
     const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
-    const tickLength = Math.max(0, ...indexes.map(index => formatTickLabel(points[index].xLabel, width < 480 ? 18 : 28).length));
+    /** Return the X tick text used for both layout and display.
+     * @param {number} index Observation index. @return {string} Fitted tick label.
+     */
+    const tickLabel = index => formatTickLabel(points[index].xLabel, xTickLabelLimit);
+    const tickLength = Math.max(0, ...indexes.map(index => tickLabel(index).length));
+    const topYTitle = yAxisLabelPosition === "top";
+    const yTitleLines = topYTitle ? yAxisLabel.split("\n") : [yAxisLabel];
+    const lineHeight = (axisFontSize ?? 11) + 4;
+    // Give a multiline caption its extra lines and one line of clearance above the highest point label.
+    const extraCaptionHeight = yTitleLines.length > 1 ? yTitleLines.length * lineHeight : 0;
+    height += extraCaptionHeight;
     const margin = {...CHART_MARGIN,
-        top: yAxisLabelPosition === "top" ? Math.max(CHART_MARGIN.top, (axisFontSize ?? 11) + 17) : CHART_MARGIN.top,
+        top: topYTitle ? lineHeight + 13 + extraCaptionHeight : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
         bottom: CHART_MARGIN.bottom + fontGrowth * 5};
     if (fitXAxisLabels || axisFontSize !== null) {
@@ -221,6 +244,7 @@ export function renderOrdinalSeriesChart({
     const horizontal = scaleLinear()
         .domain(xBounds ?? (chartType === "bar" ? [xDomain[0] - spacing / 2, xDomain[1] + spacing / 2] : xDomain))
         .range(xReverse ? [margin.left + plotWidth, margin.left] : [margin.left, margin.left + plotWidth]);
+    if (!isFiniteChartDomain(horizontal.domain())) return null;
     const x = index => horizontal(xScale === "numeric" ? numericX[index] : index);
     const groupWidth = Math.min(60, Math.abs(horizontal(xDomain[0] + spacing) - horizontal(xDomain[0])) * 0.8);
     const occurrenceCounts = new Map();
@@ -235,6 +259,7 @@ export function renderOrdinalSeriesChart({
             ? [Math.max(Number.MIN_VALUE, 10 ** minimum), Math.min(Number.MAX_VALUE, 10 ** maximum)]
             : [minimum, maximum]))
         .range([margin.top + plotHeight, margin.top]);
+    if (!isFiniteChartDomain(y.domain())) return null;
     [minimum, maximum] = y.domain().map(value => yScale === "log" ? Math.log10(value) : value);
     const baselineValue = Math.max(y.domain()[0], Math.min(0, y.domain()[1]));
     const barBaseline = y(baselineValue);
@@ -246,15 +271,17 @@ export function renderOrdinalSeriesChart({
     // values never overflow the library's decimal tick-step calculation.
     const yTicks = yScale === "log" ? scaleLinear([minimum, maximum]).ticks(yTickCount)
         .map(value => Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** value))) : y.ticks(yTickCount);
-    const topYTitle = yAxisLabelPosition === "top";
-    const yTitleX = topYTitle ? margin.left : axisFontSize === null ? 16 : Math.max(16, axisFontSize + 4);
-    const yTitleY = topYTitle ? margin.top - 13 : margin.top + plotHeight / 2;
+    const yTitles = topYTitle ? yTitleLines.map((text, line) => ({
+        text, x: yTitleLines.length > 1 ? 4 : margin.left, y: (line + 1) * lineHeight, anchor: "start",
+        tooltip: yAxisLabelTooltip,
+    })) : [{text: yAxisLabel, x: Math.max(16, (axisFontSize ?? 0) + 4),
+        y: margin.top + plotHeight / 2, rotation: -90, tooltip: yAxisLabelTooltip}];
     drawChartAxes(documentContext, chart, {left: margin.left, top: margin.top, width: plotWidth, height: plotHeight},
         {scale: horizontal, values: [...new Set(ticks)], rotation: -35,
-            format: value => formatTickLabel(points[xScale === "numeric" ? numericX.indexOf(value) : value].xLabel, width < 480 ? 18 : 28)},
+            format: value => tickLabel(xScale === "numeric" ? numericX.indexOf(value) : value)},
         {scale: y, values: yTicks, format: formatSeriesNumber}, [
             {text: xAxisLabel, x: margin.left + plotWidth / 2, y: height - 8},
-            {text: yAxisLabel, x: yTitleX, y: yTitleY, rotation: topYTitle ? 0 : -90, anchor: topYTitle ? "start" : "middle"},
+            ...yTitles,
         ], axisFontSize);
     const clipId = `series-chart-clip-${++clipSerial}`;
     const definitions = createSvgElement(documentContext, "defs", {});
@@ -343,7 +370,7 @@ export function renderOrdinalSeriesChart({
  * Missing readings paint no segment, while an all-zero row is labeled zero.
  * Mark labels and selection callbacks use the caller's original readings.
  *
- * @template {{yValue:number|null}} Point
+ * @template {{yValue:number|bigint|null}} Point
  * @param {Object} configuration Stacked chart inputs.
  * @param {Document} configuration.documentContext Owning document.
  * @param {SVGSVGElement} configuration.chart Empty target SVG.
@@ -356,20 +383,21 @@ export function renderOrdinalSeriesChart({
  * @param {(point:Point,field:string)=>string} configuration.describePoint Exact segment label and tooltip.
  * @param {(point:Point,field:string)=>void} configuration.onPointSelect Segment activation callback.
  * @param {number} [configuration.width=680] Measured chart width in screen pixels.
- * @return {{pointElements:{circle:SVGElement,point:Point}[]}} Selectable marks and their original readings.
+ * @return {{pointElements:{circle:SVGElement,point:Point}[]}|null} Marks with their original readings, or null when a reading cannot be represented by a finite number.
  */
 export function renderStackedSeriesChart({
     documentContext, chart, legend, series, rowLabels, valueAxisLabel, ariaLabel,
     describePoint, onPointSelect, width = CHART_WIDTH,
 }) {
     const rowIndexes = rowLabels.map((_, index) => index);
-    const largest = max(series, item => max(item.points, point => Math.abs(point.yValue ?? 0)));
+    const largest = max(series, item => max(item.points, point => Math.abs(Number(point.yValue))));
+    if (!Number.isFinite(largest)) return null;
     const exponent = Math.floor(Math.log10(largest || 1));
     const axisExponent = exponent >= 6 || exponent <= -4 ? Math.max(-308, exponent) : 0;
     const divisor = 10 ** axisExponent;
     const stacks = stack()
         .keys(series.map((_, index) => index))
-        .value((row, field) => (series[field].points[row].yValue ?? 0) / divisor)
+        .value((row, field) => Number(series[field].points[row].yValue) / divisor)
         .offset(stackOffsetDiverging)(rowIndexes);
     let minimum = 0;
     let maximum = 0;
@@ -436,7 +464,7 @@ export function renderStackedSeriesChart({
             const point = item.points[row];
             if (point.yValue === null) continue;
             hasReading = true;
-            if (point.yValue === 0) continue;
+            if (point.yValue === 0 || point.yValue === 0n) continue;
             hasNonzeroReading = true;
             const [start, end] = parts[row];
             const x = horizontal(start);

@@ -91,6 +91,10 @@ def test_compose_and_environment_template_cover_limits() -> None:
     for name in LIMITS:
         assert f"{name}: ${{EOLAB_{name}-" in compose
         assert f"EOLAB_{name}=" in example
+    assert (
+        '"JOBS_MAX_TIMEOUT_SECONDS=${EOLAB_JOBS_MAX_TIMEOUT_SECONDS-300}"'
+        in compose.split("  app:\n", 1)[1]
+    )
 
 
 def test_compose_shares_one_eolab_credential() -> None:

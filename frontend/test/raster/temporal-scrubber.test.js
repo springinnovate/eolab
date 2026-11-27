@@ -7,6 +7,33 @@ import {TemporalScrubber} from "../../src/raster/temporal-scrubber.js";
 const stamps = ["2000-01-02T01:00:00.000Z", "2000-01-02T02:00:00.000Z", "2000-01-05T01:00:00.000Z"];
 const months = ["2000-01", "2000-05"];
 
+test("daily playback groups midnight ends by the covered day when the convention changes", t => {
+    const {controls, widget, layer, calls} = fixture();
+    t.after(() => widget.destroy());
+    const times = ["2024-02-29T23:59:59.000Z", "2024-03-01T00:00:00.000Z", "2024-03-01T00:00:01.000Z"];
+    const timeline = {...layer.timeline, times, time: times[0]};
+    widget.setLayers([{...layer, timeline}]);
+    widget.setLayers([{...layer, timeline: {...timeline, period: "explicit"}}]);
+    controls.stride.value = "day"; controls.stride.dispatchEvent(new Event("change"));
+    controls.forward.dispatchEvent(new Event("click"));
+    assert.deepEqual(calls.at(-1), ["rain", times[2]]);
+});
+
+test("annual totals show their covered years and navigate using exact interval-end keys", () => {
+    const {controls, widget, layer, calls} = fixture();
+    try {
+        const time = "2025-01-01T00:00:00.000Z";
+        widget.setLayers([{...layer, timeline: {...layer.timeline, period: "calendar_year",
+            months: ["2024-12", "2026-12"], month: "2024-12", times: [time], time}}]);
+        widget.setMapStatus({phase: "complete"}, ["first"]);
+        assert.equal(controls.display.textContent, "On map · 2024");
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2024");
+        assert.deepEqual(Array.from(controls.month.options, option => option.textContent), ["2024", "2026"]);
+        controls.forward.dispatchEvent(new Event("click"));
+        assert.deepEqual(calls.at(-1), ["rain", "2026-12", "first"]);
+    } finally { widget.destroy(); }
+});
+
 /** Mount the actual timeline control names around a representative irregular, partial month.
  * @param {Object} [actions] Optional callback replacements for playback.
  * @return {Object} Real widget, DOM controls, source snapshot and captured actions.
@@ -79,6 +106,37 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
         assert.match(controls.gap.textContent, /3 days later/);
         widget.setLayers([{...other, visible: false}]);
         assert.equal(root.hidden, true);
+    } finally { widget.destroy(); }
+});
+
+test("timeline arrows step from a missing saved month to the nearest populated month", () => {
+    const {widget, controls, layer, calls} = fixture();
+    const missing = {...layer.timeline, month: "2000-02", time: "2000-02-29T12:00:00.000Z",
+        months: ["1999-09", "1999-12", "2000-05", "2000-08"], times: [], layerName: null,
+        error: "The selected observation is no longer available."};
+    try {
+        widget.setLayers([{...layer, timeline: missing}]);
+        assert.deepEqual(calls, []);
+        assert.equal(controls.time.getAttribute("aria-valuetext"), "2000-02-29 12:00 UTC");
+        assert.equal(controls.back.disabled, false);
+        assert.equal(controls.forward.disabled, false);
+        assert.equal(controls.gap.textContent, "Next month · 2000-05");
+        controls.back.dispatchEvent(new Event("click"));
+        controls.forward.dispatchEvent(new Event("click"));
+        controls.stride.value = "day";
+        controls.stride.dispatchEvent(new Event("change"));
+        controls.time.dispatchEvent(Object.assign(new Event("keydown"), {key: "ArrowLeft"}));
+        assert.deepEqual(calls, [["rain", "1999-12", "last"], ["rain", "2000-05", "first"],
+            ["rain", "1999-12", "firstOfLastDay"]]);
+
+        for (const [onlyMonth, disabledButton, enabledButton] of [
+            ["1999-12", "forward", "back"], ["2000-05", "back", "forward"],
+        ]) {
+            widget.setLayers([{...layer, timeline: {...missing, months: [onlyMonth]}}]);
+            assert.equal(controls[disabledButton].disabled, true);
+            assert.equal(controls[enabledButton].disabled, false);
+            assert.equal(controls.time.disabled, false, "the arrow keys can reach the only available month");
+        }
     } finally { widget.destroy(); }
 });
 

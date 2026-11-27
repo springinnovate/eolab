@@ -33,6 +33,7 @@ export class MapInspectionController {
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.toolName = documentContext.querySelector("#map-tool-name");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
+        this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.tabStrip = new ToolTabStrip(documentContext, "map-inspection");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
         this.mapToolsButton = documentContext.querySelector("#map-tool-chooser");
@@ -92,6 +93,10 @@ export class MapInspectionController {
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.settingsPanel = documentContext.querySelector("#settings-panel");
         this.openSettingsButton = documentContext.querySelector("#open-settings");
+        this.openFeaturesButton = documentContext.querySelector("#open-features");
+        /** Open the retained Features destination, including its empty guidance. @return {void} */
+        this.onOpenFeatures = () => this.showFeatureInspector();
+        this.openFeaturesButton.addEventListener("click", this.onOpenFeatures);
         this.closeSettingsButton = documentContext.querySelector("#close-settings");
         this.tools = [
             { name: "planning", label: "Planning", panel: documentContext.querySelector("#planning-panel"),
@@ -180,6 +185,26 @@ export class MapInspectionController {
             const tool = this.tools.find(({ tab }) => tab === event.currentTarget);
             if (tool !== undefined) this.#activateTool(tool.name);
         };
+        /** Focus the surviving tool after its peer's close handler finishes.
+         * @param {MouseEvent} event Click bubbling from the map tab row.
+         * @return {void}
+         */
+        this.onTabCloseClick = event => {
+            if (!event.target.classList.contains("tool-tab-close")) return;
+            this.#focusActiveTabOrChooser();
+        };
+        /** Let Escape dismiss a tool from its close button just as it does from its panel.
+         * @param {KeyboardEvent} event Key pressed in the map tab row.
+         * @return {void}
+         */
+        this.onTabCloseKey = event => {
+            if (event.key !== "Escape" || !event.target.classList.contains("tool-tab-close")) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.target.click();
+        };
+        this.tabList.addEventListener("click", this.onTabCloseClick);
+        this.tabList.addEventListener("keydown", this.onTabCloseKey);
         this.onToggleFeatureDetails = () =>
             this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
@@ -426,7 +451,6 @@ export class MapInspectionController {
      * @return {void}
      */
     showFeatureInspector(options = {}) {
-        this.#setToolLabel("feature", "Features…", "Inspecting vector features");
         this.#showTool("feature", options);
     }
 
@@ -439,6 +463,7 @@ export class MapInspectionController {
         this.hasClick = true;
         this.clickPosition = { lng: position.lng, lat: position.lat };
         for (const entry of this.clickResults) {
+            if (entry.name === "feature") continue;
             entry.snapshot = null;
             entry.unread = false;
         }
@@ -478,9 +503,9 @@ export class MapInspectionController {
     /** Present an owning analysis stream's current, already stale-checked status.
      * @param {"histogram"|"feature"} name Result stream.
      * @param {{state:"loading"|"ready"|"empty"|"error"|"invalidated",message?:string,
-     * position?:Readonly<{lng:number,lat:number}>}|null} snapshot Feature snapshots
-     * include their status and can describe a previously inspected point. A null
-     * snapshot clears the result for this click.
+     * position?:Readonly<{lng:number,lat:number}>|null}|null} snapshot Feature snapshots
+     * include their status and can describe a previous point or a Lasso with null
+     * position. They do not require a map click. A null snapshot clears the result.
      * @return {void}
      * @throws {TypeError} For an invalid stream or presentation snapshot.
      */
@@ -491,7 +516,7 @@ export class MapInspectionController {
         ].includes(snapshot.state) || (name === "feature" && typeof snapshot.message !== "string")))) {
             throw new TypeError("Invalid map-click result presentation.");
         }
-        if (!this.hasClick) return;
+        if (!this.hasClick && name !== "feature") return;
         const changed = JSON.stringify(entry.snapshot) !== JSON.stringify(snapshot);
         entry.snapshot = snapshot === null ? null : {...snapshot};
         if (snapshot === null || snapshot.state === "loading") entry.unread = false;
@@ -512,7 +537,7 @@ export class MapInspectionController {
             const {name, button, snapshot} = entry;
             const tool = this.#tool(name);
             const loading = snapshot?.state === "loading";
-            button.disabled = name === "feature" && tool.panel.hidden && snapshot === null;
+            button.disabled = false;
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
             if (entry.unread) button.setAttribute("aria-description", "New results");
@@ -529,7 +554,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Present the number of features returned by the current map click.
+     * Present the number of features in the inspector-owned selection.
      *
      * @param {number} resultCount Number of inspected vector features.
      * @param {Object} [options] Presentation options.
@@ -541,7 +566,6 @@ export class MapInspectionController {
         if (typeof loading !== "boolean") {
             throw new TypeError("Feature loading state must be boolean.");
         }
-        if (this.feature.hidden) return;
         if (loading && resultCount === 0) {
             this.#setToolLabel(
                 "feature", "Features…", "Inspecting vector features"
@@ -553,7 +577,7 @@ export class MapInspectionController {
                 `Features · ${resultCount}${loading ? "…" : ""}`,
                 loading
                     ? `${resultCount} ${noun} found; vector inspection continues`
-                    : `${resultCount} ${noun} at the selected map location`
+                    : `${resultCount} ${noun} selected`
             );
         }
         this.#renderDock();
@@ -566,7 +590,6 @@ export class MapInspectionController {
      */
     hideFeatureInspector() {
         this.#hideTool("feature");
-        this.#resetToolLabel("feature");
     }
 
     /**
@@ -657,13 +680,22 @@ export class MapInspectionController {
 
     /**
      * Close one retained map tool and activate the most recently used survivor.
+     * If the closed panel held keyboard focus, move it to the surviving tab or chooser.
      *
      * @param {string} name Stable presentation name from this controller's tool set.
      * @return {void}
      */
     #hideTool(name) {
+        const panelHadFocus = this.#tool(name).panel.contains(this.document.activeElement);
         this.#closeToolState(name);
         this.#synchronize();
+        if (panelHadFocus) this.#focusActiveTabOrChooser();
+    }
+
+    /** Focus the surviving tab after a tool closes, or the chooser when none remain. @return {void} */
+    #focusActiveTabOrChooser() {
+        const target = this.activeTool ? this.#tool(this.activeTool).tab : this.mapToolsButton;
+        target.focus();
     }
 
     /**
@@ -838,6 +870,7 @@ export class MapInspectionController {
             this.activationOrder = [];
         }
         const openChanged = shouldOpen !== this.isOpen;
+        const returnFocusToChooser = openChanged && !shouldOpen && this.root.contains(this.document.activeElement);
         this.isOpen = shouldOpen;
         this.#renderDock();
         if (openChanged) {
@@ -852,7 +885,10 @@ export class MapInspectionController {
                     focusedCommand?.focus({ preventScroll: true });
                 }
             }
-            else this.root.hidePopover();
+            else {
+                this.root.hidePopover();
+                if (returnFocusToChooser) this.mapToolsButton.focus();
+            }
             this.#reportLayoutChange();
         }
     }
@@ -868,7 +904,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Show the active tool in the header chooser and fit its available peer views on the tab strip.
+     * Show the active tool in the chooser and give each open tool a close action on its tab.
      * Raster destinations retain their existing open actions. Passive results update labels
      * without moving keyboard focus or changing the chosen foreground tool.
      * Feature context follows the displayed inspection, including when it predates the latest click.
@@ -883,10 +919,11 @@ export class MapInspectionController {
         this.toolName.textContent = tool?.label ?? "Choose a tool";
         this.mapToolsButton.setAttribute("aria-label", tool ? `${tool.label}, choose a map tool` : "Choose a tool");
         const featureResult = this.clickResults.find(entry => entry.name === "feature");
-        const position = featureResult.snapshot?.position ?? this.clickPosition;
-        const featureClickLabel = position ? `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : "";
+        const position = featureResult.snapshot && "position" in featureResult.snapshot
+            ? featureResult.snapshot.position : this.clickPosition;
+        const featureClickLabel = position ? `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : "Selected features";
         const context = tool?.context ?? (this.activeTool === "feature"
-            ? { source: "Visible vector layers", scope: featureClickLabel }
+            ? { source: "", scope: featureClickLabel }
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = !this.dockContext.textContent || this.activeTool !== "raster-clips";
@@ -897,8 +934,8 @@ export class MapInspectionController {
         for (const { name, panel, tab, resultTab } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
-            tab.hidden = resultTab ? false : !open ||
-                (name === "style" && this.activeTool === "raster-series");
+            tab.hidden = !resultTab && !open;
+            tab.setAttribute("data-open", String(open));
             panel.setAttribute("data-map-inspection-active", String(active));
             panel.setAttribute(
                 "aria-hidden", String(!active || this.minimized)
@@ -912,11 +949,9 @@ export class MapInspectionController {
                 (name === "feature" ? featureClickLabel : ""),
         ]));
         const previous = this.activationOrder.at(-2);
-        const loneToolTitle = tool && !tool.resultTab && !this.hasClick && this.#openTools().length === 1
-            ? this.mapToolsButton : null;
         this.tabStrip.render(tool?.tab ?? null, {
             previous: previous ? this.#tool(previous).tab : null,
-            contexts, hidden: this.minimized, titleButton: loneToolTitle,
+            contexts, hidden: this.minimized,
         });
         if (active !== this.reportedActiveTool) {
             this.#setClickResultActivity(false);
@@ -966,6 +1001,7 @@ export class MapInspectionController {
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
         this.openSettingsButton.removeEventListener("click", this.onOpenSettings);
+        this.openFeaturesButton.removeEventListener("click", this.onOpenFeatures);
         this.closeSettingsButton.removeEventListener("click", this.onCloseSettings);
         this.collapseButton.removeEventListener("click", this.onTogglePanel);
         this.expandButton.removeEventListener("click", this.onTogglePanel);
@@ -992,6 +1028,8 @@ export class MapInspectionController {
         this.minimized = false;
         this.setFeatureInspectorExpanded(true);
         this.#synchronize();
+        this.tabList.removeEventListener("click", this.onTabCloseClick);
+        this.tabList.removeEventListener("keydown", this.onTabCloseKey);
         this.tabStrip.destroy();
         this.activityListeners.clear();
         this.#clickResultActivityListeners.clear();

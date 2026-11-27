@@ -371,16 +371,23 @@ class JobStore(Protocol):
         """
         ...
 
-    def claim_next_job(self) -> dict[str, Any] | None:
-        """Claim the oldest eligible job for the least recently served session.
+    def claim_next_job(
+        self, *, supported_operations: list[str] | None = None
+    ) -> dict[str, Any] | None:
+        """Claim the oldest compatible request for the next eligible session.
 
-        New sessions go first; ties use job admission order. Only the concurrent
-        worker count restricts admission. Lost leases do not release active slots:
-        the supervisor must stop native work before recording the terminal state.
+        New sessions go first, followed by the least recently served. Ties use the
+        time each session subscribed. Running and cancelling jobs across all
+        operations count toward capacity. A job with a lost lease holds its slot
+        until the supervisor stops native work and records the terminal state.
         Container startup recovers interrupted work after the previous worker exits.
 
+        Args:
+            supported_operations: Operation IDs the worker can execute. An empty list
+                claims nothing. None selects across all operations.
+
         Returns:
-            Claimed job, or None when the queue is empty or all worker slots are occupied.
+            Claimed job, or None when no eligible work or worker slot is available.
         """
         ...
 

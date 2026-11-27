@@ -107,12 +107,14 @@ class HabitatSetupSession {
      * @param {Object} draft Editable Habitat inputs and model-owned setup state.
      * @param {import("./model-setup.js").ModelSetupDependencies} dependencies Explicit transport and UI callbacks.
      * @param {Object} dependencies.api Processing transport for Habitat metadata and coverage.
+     * @param {import("./model-setup.js").ModelCatalogRasters["findByTitles"]} [dependencies.findCatalogRasterTitles] Look up already published mosaics for display.
      * @param {(selection:Object,signal:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read display metadata for an exact Item.
+     * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Display the prepared polygon until its signal is aborted.
      * @param {()=>void} dependencies.render Notify the host that draft presentation changed.
      * @param {()=>void} dependencies.closeInputEditor Close an active editor before mode changes.
      */
-    constructor(draft, {api, getCatalogItem, render, closeInputEditor}) {
-        Object.assign(this, {draft, api, getCatalogItem, render, closeInputEditor});
+    constructor(draft, {api, getCatalogItem, findCatalogRasterTitles, showAreaOutline, render, closeInputEditor}) {
+        Object.assign(this, {draft, api, getCatalogItem, findCatalogRasterTitles, showAreaOutline, render, closeInputEditor});
         this.disposed = false;
     }
 
@@ -131,6 +133,7 @@ class HabitatSetupSession {
      */
     inputChanged(name, change) {
         if (this.draft.model.inputs[name].type !== "habitat_stack") return;
+        if (change.kind || "year" in change) void this.loadMapLayers();
         if (change.kind) {
             for (const [key, definition] of Object.entries(this.draft.model.inputs)) {
                 if (definition.type === "summary_area" && this.draft.inputs[key].filterEditing) this.closeInputEditor();
@@ -142,15 +145,15 @@ class HabitatSetupSession {
     }
 
     /** Dispatch an action emitted by Habitat's own setup controls.
-     * @param {string} action Selection or retry action registered by the Habitat view.
-     * @param {unknown} value Selected descriptor or stack input name when required.
+     * @param {string} action Input, outline or dataset-options action from the Habitat view.
+     * @param {unknown} value Selected descriptor, outline visibility or stack input name.
      * @return {Promise<void>|void} Completion for reads, or immediate selection change.
      */
     action(action, value) {
+        if (action === "refresh-map-layers") return this.loadMapLayers();
         if (action === "refresh-options") return this.loadOptions(this.draft, value);
         if (action === "select-preparation") return this.chooseSelection(value);
-        if (action === "refresh-preparations") return this.loadSelections(this.draft);
-        if (action === "refresh-coverage") return this.refreshCoverage(true);
+        if (action === "show-outline") return this.setOutlineVisible(value);
     }
 
     /** Cancel setup reads so replaced drafts cannot receive late updates.
@@ -159,6 +162,7 @@ class HabitatSetupSession {
     dispose() {
         this.disposed = true;
         this.optionsAbort?.abort();
+        this.mapLookup?.abort();
         this.cancelPreparationReads();
     }
 
@@ -181,6 +185,7 @@ class HabitatSetupSession {
             input.configuration = options; input.year ??= options.defaultYear;
             for (const [role, field] of [["predictor", "predictorDatasets"], ["response", "responseDatasets"]])
                 input[field] ??= options.datasets.filter(dataset => dataset.roles.includes(role)).map(dataset => dataset.id);
+            void this.loadMapLayers();
         } catch (error) {
             if (abort.signal.aborted || this.disposed) return;
             input.error = `Could not load Earth Engine choices: ${error.message}`;
@@ -192,11 +197,54 @@ class HabitatSetupSession {
         }
     }
 
-    /** Cancel preparation-selection and coverage reads without changing accepted run inputs.
-     * Draft replacement, mode changes and destruction invalidate their late responses.
+    /** Find the selected year's published mosaics independently of checkbox choices.
+     * Each title and band description must match the exporter. Multiple Items for the same
+     * variable remain ambiguous. Results from another year or abandoned draft are ignored.
+     * @return {Promise<void>} Resolves after matches or a retryable lookup error are displayed.
+     */
+    async loadMapLayers() {
+        this.mapLookup?.abort();
+        const stack = getHabitatEarthEngineInput(this.draft);
+        const state = this.draft.setupState;
+        state.mapLayers = null;
+        if (!this.findCatalogRasterTitles || !stack?.configuration) return;
+        const {year, configuration} = stack;
+        const variables = new Map();
+        for (const dataset of configuration.datasets) {
+            for (const [role, inputs] of Object.entries(dataset.inputsByRole)) {
+                for (const {variable} of inputs) variables.set(`${variable} (assessment year ${year})`, {variable, role});
+            }
+        }
+        const lookup = {loading: true, error: "", matches: new Map()};
+        state.mapLayers = lookup;
+        const abort = new AbortController(); this.mapLookup = abort;
+        this.render();
+        try {
+            const items = await this.findCatalogRasterTitles([...variables.keys()], abort.signal);
+            if (abort.signal.aborted) return;
+            for (const item of items) {
+                const expected = variables.get(item.properties.title);
+                const bands = item.assets.data?.["raster:bands"];
+                if (!expected || bands?.length !== 1 || bands[0].description !== expected.variable ||
+                    !item.properties.description?.startsWith(`Prepared Ecosystem Condition ${expected.role} for assessment year ${year}.`)) continue;
+                const matches = lookup.matches.get(expected.variable) ?? [];
+                if (!matches.some(match => match.id === item.id && match.collection === item.collection)) matches.push(item);
+                lookup.matches.set(expected.variable, matches);
+            }
+        } catch {
+            if (!abort.signal.aborted) lookup.error = "Could not check the Catalog for map layers.";
+        } finally {
+            lookup.loading = false;
+            if (!abort.signal.aborted) this.render();
+        }
+    }
+
+    /** Remove the prepared-area outline and cancel outstanding area and coverage reads.
+     * Draft replacement, input mode changes and disposal invalidate their late responses.
      * @return {void}
      */
     cancelPreparationReads() {
+        this.clearOutline();
         this.selectionsAbort?.abort(); this.coverageAbort?.abort();
         this.coverageKey = null;
         const state = this.draft?.setupState;
@@ -221,7 +269,7 @@ class HabitatSetupSession {
             const {selections} = await this.api.getHabitatPreparationSelections(abort.signal);
             if (!isCurrent()) return;
             state.selections = selections; state.loaded = true;
-            const previous = state.restoreSelection ?? state.selectedSelection;
+            const previous = state.restoreSelection;
             if (previous) {
                 const restored = selections.find(selection => vectorSelectionsEqual(selection, previous));
                 state.selectedSelection = restored ?? null; state.unavailable = !restored;
@@ -229,7 +277,7 @@ class HabitatSetupSession {
             }
             void this.loadTitles(draft, selections, abort);
         } catch (error) {
-            if (isCurrent()) state.error = "Preparation selections could not be loaded. Refresh to try again. " + error.message;
+            if (isCurrent()) state.error = "Analysis areas could not be loaded. Reopen this tool to try again. " + error.message;
         } finally {
             if (isCurrent()) {
                 state.loading = false; this.render(); await this.refreshCoverage();
@@ -239,7 +287,7 @@ class HabitatSetupSession {
 
     /** Read each distinct Catalog Item's title without gating a preparation selection.
      * Unavailable metadata leaves the layer name as the display fallback. Late replies
-     * cannot replace titles after refresh, mode changes or draft replacement.
+     * cannot replace titles after mode changes or draft replacement.
      * @param {Object} draft Habitat draft receiving presentation-only titles.
      * @param {Object[]} selections Validated Catalog selections, possibly sharing an Item.
      * @param {AbortController} abort Cancellation owned by the selection-list request.
@@ -264,24 +312,52 @@ class HabitatSetupSession {
     chooseSelection(selection) {
         const draft = this.draft;
         if (!draft || !getHabitatEarthEngineInput(draft)) return;
+        const keepOutlineVisible = Boolean(this.outlineAbort);
         Object.assign(draft.setupState, {selectedSelection: selection, restoreSelection: null, unavailable: false});
-        void this.refreshCoverage(); this.render();
+        void this.refreshCoverage();
+        void this.setOutlineVisible(keepOutlineVisible);
+    }
+
+    /** Remove this draft's displayed polygon and cancel any pending outline.
+     * @return {void}
+     */
+    clearOutline() {
+        this.outlineAbort?.abort();
+        this.outlineAbort = null;
+        this.draft.setupState.outlineStatus = "hidden";
+    }
+
+    /** Show or hide the chosen area while leaving coverage and model inputs independent.
+     * @param {boolean} visible Whether to draw the selected Catalog polygons and zoom to them.
+     * @return {Promise<void>} Completion after the outline or its availability message is shown.
+     */
+    async setOutlineVisible(visible) {
+        this.clearOutline();
+        const state = this.draft.setupState;
+        if (visible && state.selectedSelection) {
+            const abort = new AbortController();
+            this.outlineAbort = abort;
+            state.outlineStatus = "loading"; this.render();
+            const shown = await this.showAreaOutline(state.selectedSelection, abort.signal);
+            if (abort.signal.aborted) return;
+            if (!shown) this.clearOutline();
+            state.outlineStatus = shown ? "visible" : "unavailable";
+        }
+        this.render();
     }
 
     /** Check the selected Catalog features and year, ignoring superseded replies.
-     * Repeated renders and unrelated input changes reuse this completed check;
-     * explicit retry, year/selection edits and mode changes request current coverage.
-     * @param {boolean} [retry=false] Refresh the same selection/year after user action.
-     * @return {Promise<void>} Completion after current coverage or retry guidance is displayed.
+     * Unrelated edits reuse the current check. Changing area, year or mode starts a new one.
+     * @return {Promise<void>} Completion after coverage or an error is displayed.
      */
-    async refreshCoverage(retry = false) {
+    async refreshCoverage() {
         const draft = this.draft;
         const stack = draft && getHabitatEarthEngineInput(draft), state = draft?.setupState;
         if (!stack || !state) return;
         const ready = state.loaded && !state.loading && !state.error &&
             state.selections.some(selection => vectorSelectionsEqual(selection, state.selectedSelection)) && Number.isInteger(stack.year);
         const key = ready ? JSON.stringify([draft.id, state.selectedSelection, stack.year]) : null;
-        if (!retry && key && key === this.coverageKey) return;
+        if (key && key === this.coverageKey) return;
         this.coverageAbort?.abort(); this.coverageKey = key;
         state.coverage = null; state.coverageError = ""; state.coverageLoading = Boolean(key);
         if (!key) { this.render(); return; }
@@ -294,7 +370,7 @@ class HabitatSetupSession {
             const coverage = await this.api.getHabitatPreparationCoverage(selection, year, abort.signal);
             if (isCurrent()) state.coverage = coverage;
         } catch (error) {
-            if (isCurrent()) state.coverageError = "Prepared-input coverage could not be checked. Try again. " + error.message;
+            if (isCurrent()) state.coverageError = "Prepared-input coverage could not be checked. Clear and reselect the analysis area to try again. " + error.message;
         } finally {
             if (isCurrent()) { state.coverageLoading = false; this.render(); }
         }
@@ -320,7 +396,7 @@ function createState(model, inputs, context, {viewportArea}) {
         input.capturedArea = structuredClone(input.area);
     }
     return {selections: [], titles: {}, loaded: false, loading: false, error: "",
-        selectedSelection: null, restoreSelection: null, unavailable: false,
+        selectedSelection: null, restoreSelection: null, unavailable: false, outlineStatus: "hidden",
         coverage: null, coverageLoading: false, coverageError: ""};
 }
 
@@ -474,7 +550,8 @@ function buildInput(ui, handlers, name, definition, draft) {
             buildRasterInput: (fields, id, input, onChange, onResampling) => buildRasterInput(ui, fields, id, input, onChange, onResampling),
             renderRasterInput: (raster, input, value, state) => renderRasterInput(ui, raster, input, value, state),
             captureStack: (value, sources) => captureHabitatStack(value, sources, ui.captureRaster)}, {onInput: handlers.onInput,
-            onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName)}, name, definition);
+            onRefreshHabitat: inputName => handlers.onSetupAction("refresh-options", inputName),
+            onRefreshMaps: () => handlers.onSetupAction("refresh-map-layers")}, name, definition);
         ui.append(controls.root);
         controls.renderModelInput = (value, state) => controls.render(value, state);
         return controls;
@@ -482,16 +559,12 @@ function buildInput(ui, handlers, name, definition, draft) {
     if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
         const isOutputMask = name === "habitat_mask" && definition.type === "optional_raster";
         const fields = ui.element(isOutputMask ? "fieldset" : "div", "", "models-vector");
-        const displayDefinition = isOutputMask ? {...definition, label: "Output mask (optional)"} : definition;
+        const displayDefinition = isOutputMask ? {...definition, label: "Output mask (optional) — calculate scores only where the mask is 1"} : definition;
         const controls = buildRasterInput(ui, fields, name, displayDefinition, raster => handlers.onInput(name, {raster}),
             resampling => handlers.onInput(name, {resampling}));
         if (isOutputMask) {
-            fields.setAttribute("aria-label", "Output mask (optional)");
-            const hint = ui.element("p", "Limits results to cells with a mask value of 1 on the output grid.", "models-help");
-            hint.id = `models-${name}-help`;
-            controls.source.setAttribute("aria-describedby", `${hint.id} ${controls.reason.id}`);
-            fields.append(hint);
-            Object.assign(controls, {root: fields, hint});
+            fields.setAttribute("aria-label", displayDefinition.label);
+            controls.root = fields;
         }
         ui.append(fields);
         controls.renderModelInput = (value, state) => renderRasterInput(ui, controls, definition, value.inputs[name], state);
@@ -506,8 +579,7 @@ function buildInput(ui, handlers, name, definition, draft) {
     const controls = ui.buildSpatialInput(name, definition);
     controls.preparationSelection = new HabitatPreparationSelectionView({...ui, captureSelection: captureHabitatPreparationSelection}, {
         onHabitatPreparationSelection: selection => handlers.onSetupAction("select-preparation", selection),
-        onRefreshHabitatPreparationSelections: () => handlers.onSetupAction("refresh-preparations"),
-        onRefreshHabitatCoverage: () => handlers.onSetupAction("refresh-coverage"),
+        onShowOutline: visible => handlers.onSetupAction("show-outline", visible),
     }, name, definition.label);
     ui.append(controls.preparationSelection.root);
     controls.renderModelInput = (value, state) => {
@@ -532,4 +604,4 @@ function createSession(draft, dependencies) { return new HabitatSetupSession(dra
 /** Habitat integration registered once at the model setup boundary.
  * @type {import("./model-setup.js").ModelSetupIntegration}
  */
-export const habitatSetup = Object.freeze({createState, createInput, captureInput, restoreInput, restoreState, describeInput, buildInput, createSession});
+export const habitatSetup = Object.freeze({showRunNameHelp: false, createState, createInput, captureInput, restoreInput, restoreState, describeInput, buildInput, createSession});

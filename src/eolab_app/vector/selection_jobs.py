@@ -10,22 +10,37 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.selection_operation import ComparisonResult, SelectionMeasurementResult
 
 
-async def compare_selection_job(jobs: JobsClient, token: str) -> None:
+async def compare_selection_job(
+    jobs: JobsClient, token: str, execution_seconds: int, *, max_timeout_seconds: float
+) -> None:
     """Queue an exact polygon comparison and hold both original inputs until native exit.
 
     Args:
         jobs: Authenticated application connection to the existing Jobs queue.
         token: One-request capability for obtaining the source pair and returning its IDs.
+        execution_seconds: Requested native budget for the comparison or Lasso stages.
+        max_timeout_seconds: Operator's ceiling for queue and execution time.
 
     Raises:
         VectorConflictError: If the queue or native reader cannot complete the comparison.
         asyncio.CancelledError: After the job has stopped using both original sources.
     """
+    # Jobs accepts whole-second overrides. Below one second its configured defaults apply.
+    whole_seconds = int(max_timeout_seconds)
+    execution_limit = min(execution_seconds, whole_seconds)
+    queue_limit = min(30, whole_seconds)
     try:
         result = await jobs.run(
-            {"operation": "vector.intersection.v1", "inputs": {"spatialRead": token}, "priority": 0,
-             "executionTimeoutSeconds": 20, "queueTimeoutSeconds": 30},
-            timeout_seconds=60, delete_on_completion=True, require_terminal_cleanup=True,
+            {
+                "operation": "vector.intersection.v1",
+                "inputs": {"spatialRead": token},
+                "priority": 0,
+                "executionTimeoutSeconds": execution_limit or None,
+                "queueTimeoutSeconds": queue_limit or None,
+            },
+            timeout_seconds=queue_limit + execution_limit + 10,
+            delete_on_completion=True,
+            require_terminal_cleanup=True,
         )
         outcome = ComparisonResult.model_validate(result.value)
     except (JobFailed, httpx2.HTTPError, ValueError, TimeoutError) as error:

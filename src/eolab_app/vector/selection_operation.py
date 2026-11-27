@@ -40,14 +40,14 @@ SOURCE_FILES_URL = "http://app:8000/api/processing/source-files"
 
 
 class ComparisonInput(BaseModel):
-    """A one-job credential for reading the original target and its authorized polygon sources."""
+    """A one-job credential for reading original sources and delivering the selected features."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     spatialRead: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ComparisonResult(BaseModel):
-    """An optional readable failure after matching IDs have been returned to their owner."""
+    """Acknowledge the private selection handoff or report a readable source failure."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     error: str | None = Field(default=None, max_length=1024)
@@ -293,9 +293,9 @@ def compare_selected_features(inputs: ComparisonInput) -> ComparisonResult:
     from eolab_app.vector_uploads import VectorUploadError
 
     async def compare() -> None:
-        """Return original feature IDs while the submitting request holds both sources."""
+        """Deliver the requested filter or inspection result while the requester holds its sources."""
         async with httpx2.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
-            await return_intersecting_ids(client, inputs)
+            await deliver_intersection_result(client, inputs)
 
     try:
         asyncio.run(compare())
@@ -306,8 +306,10 @@ def compare_selected_features(inputs: ComparisonInput) -> ComparisonResult:
     return ComparisonResult()
 
 
-async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: ComparisonInput) -> None:
-    """Read the original layers and send the complete selection and count to the waiting request.
+async def deliver_intersection_result(
+    client: "httpx2.AsyncClient", inputs: ComparisonInput
+) -> None:
+    """Deliver matching IDs for a filter or ordered rows and optional highlights for Lasso.
 
     Args:
         client: Internal connection to the application, catalog and leased-file authority.
@@ -325,23 +327,58 @@ async def return_intersecting_ids(client: "httpx2.AsyncClient", inputs: Comparis
     from eolab_app.polygon_areas import SummaryPolygon
     from shapely.geometry import shape
 
-    async def read_layer(layer: dict[str, Any]) -> "IntersectionLayer":
-        """Open a bound file source or recover the committed drawings sent for this read."""
-        if "polygons" in layer:
-            return tuple(SummaryPolygon.model_validate(polygon) for polygon in layer["polygons"])
+    async def read_original(layer: dict[str, Any]) -> ResolvedCatalogSelection:
+        """Authorize a file from its worker descriptor and bind its retained spatial matches.
+
+        Args:
+            layer: Server-supplied selection, owner credentials and prior filter matches.
+
+        Returns:
+            The authorized original ready for comparison and direct feature reads.
+        """
         matches = layer.pop("matches")
         original = await _open_job_selection(client, SelectionMeasurementInput.model_validate(layer))
         return replace(original, matches=FeatureMatches.model_validate(matches)) if matches is not None else original
+
+    async def read_layer(layer: dict[str, Any]) -> "IntersectionLayer":
+        """Open a file-backed or browser-drawn boundary for an ordinary comparison.
+
+        Args:
+            layer: Held source descriptor from the application.
+
+        Returns:
+            Authorized original features or the committed drawing polygons.
+        """
+        if "polygons" in layer:
+            return tuple(
+                SummaryPolygon.model_validate(polygon) for polygon in layer["polygons"]
+            )
+        return await read_original(layer)
 
     headers = {"Authorization": f"Bearer {inputs.spatialRead}"}
     response = await client.get(SPATIAL_READ_URL, headers=headers)
     response.raise_for_status()
     data = response.json()
+    if "lasso" in data:
+        from eolab_app.vector.lasso import deliver_lasso_features
+
+        with _limit_memory():
+            original = await read_original(data["target"])
+            matches = match_features(
+                original, {}, VectorFilter(), required_area=shape(data["lasso"])
+            )
+        await deliver_lasso_features(
+            client, SPATIAL_READ_URL, headers, original, tuple(sorted(matches.ids))
+        )
+        return
     with _limit_memory():
         target = await read_layer(data["target"])
         boundaries = {key: await read_layer(source) for key, source in data["boundaries"].items()}
-        required_area = shape(data["requiredArea"]) if data["requiredArea"] is not None else None
-        matches = match_features(target, boundaries, VectorFilter.model_validate(data["filter"]), data["drawingProperties"],
-                                 required_area=required_area)
+        matches = match_features(
+            target,
+            boundaries,
+            VectorFilter.model_validate(data["filter"]),
+            data["drawingProperties"],
+        )
     delivered = await client.put(SPATIAL_READ_URL, headers=headers, json=matches.model_dump(mode="json"))
     delivered.raise_for_status()

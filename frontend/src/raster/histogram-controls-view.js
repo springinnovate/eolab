@@ -53,6 +53,7 @@ import { requireRasterControl } from "./required-control.js";
 
 /**
  * @typedef {Object} HistogramSummaryCard
+ * @property {HTMLButtonElement} styleButton Shortcut to the layer's appearance editor.
  * @property {string} key Raster identity.
  * @property {string} signature Serialized presentation last rendered in the card.
  * @property {HTMLElement} root Article owning the chart and actions.
@@ -107,6 +108,7 @@ export class RasterHistogramControlsView {
         );
         /** @type {Map<string, HistogramSummaryCard>} */
         this.summaryCards = new Map();
+        this.styleEditingEnabled = true;
         this.axisStates = new Map();
         this.categoryExpansions = new Map();
         this.detailAxisControls = null;
@@ -217,6 +219,19 @@ export class RasterHistogramControlsView {
                     ?? this.histogramEmpty;
             if (target === this.histogramEmpty) target.setAttribute("tabindex", "-1");
             if (this.documentContext.activeElement !== target) target.focus({ preventScroll: true });
+        }
+    }
+
+    /** Update existing histogram style shortcuts and color matching, preserving numerical controls.
+     * @param {boolean} enabled Whether visitors can change raster appearance.
+     * @return {void}
+     */
+    setStyleEditingEnabled(enabled) {
+        this.styleEditingEnabled = enabled;
+        this.detailPercentileControls?.setStyleEditingEnabled(enabled);
+        for (const card of this.summaryCards.values()) {
+            card.styleButton.hidden = !enabled;
+            card.percentileControls?.setStyleEditingEnabled(enabled);
         }
     }
 
@@ -385,6 +400,7 @@ export class RasterHistogramControlsView {
                 presentation.redraw();
                 this.handlers?.onHistogramPercentiles(key, settings);
             });
+        this.detailPercentileControls?.setStyleEditingEnabled(this.styleEditingEnabled);
         this.detailPercentileControls?.render(statistics, style, percentileContext.settings,
             percentileContext.canRescale, percentileContext.message);
         const { controls, redraw } = this.#createAxisControls(key, this.histogramChart, statistics,
@@ -532,6 +548,7 @@ export class RasterHistogramControlsView {
                 card.redraw?.();
                 this.handlers?.onHistogramPercentiles(card.key, settings);
             });
+            card.percentileControls.setStyleEditingEnabled(this.styleEditingEnabled);
             card.percentileControls.render(summary.statistics, summary.style,
                 summary.percentileSettings, summary.canRescale, summary.percentileMessage);
         }
@@ -569,6 +586,8 @@ export class RasterHistogramControlsView {
         style.type = "button";
         style.className = "secondary-button";
         style.textContent = "Style this raster";
+        card.styleButton = style;
+        style.hidden = !this.styleEditingEnabled;
         style.setAttribute("aria-controls", "layer-style-editor");
         style.setAttribute("aria-label", `Style ${summary.label}`);
         this.#bindSummaryAction(card, style, "onStyleHistogram");

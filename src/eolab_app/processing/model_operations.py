@@ -60,6 +60,16 @@ from eolab_app.processing.temporal_models import (
     TemporalReduction,
 )
 from eolab_app.processing import raster_operations as raster
+from eolab_app.processing import raster_calculator as calculator
+from eolab_app.processing.raster_calculator_models import (
+    OPERATION as RASTER_CALCULATOR_OPERATION,
+    INPUT_TYPE as RASTER_FORMULA_INPUT,
+    QueuedRasterCalculator,
+    RasterCalculatorPolicy,
+    RasterCalculatorRequest,
+    RasterCalculatorSpec,
+    RasterFormulaInput,
+)
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing import downstream_operation as downstream
 from eolab_app.processing.downstream_models import (
@@ -72,6 +82,7 @@ from eolab_app.processing.downstream_models import (
     VectorStartingMask,
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
+from eolab_app.processing import flow_area, flow_area_operation as flow
 from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing import habitat_preparation as habitat_inputs
 from eolab_app.processing import habitat_bulk_preparation as habitat_bulk
@@ -289,6 +300,48 @@ OPERATIONS = MappingProxyType(
         operation.id: operation
         for operation in (
             ModelOperation[
+                RasterCalculatorRequest, QueuedRasterCalculator, RasterCalculatorSpec
+            ](
+                id=RASTER_CALCULATOR_OPERATION,
+                inputs=(
+                    ("calculation", RASTER_FORMULA_INPUT),
+                    ("area", "explicit_area"),
+                ),
+                parameters=(),
+                output=OperationOutput(
+                    "raster", "raster", "map", "image/tiff", "Calculated raster"
+                ),
+                execution_profile="raster-calculator",
+                queued_type=QueuedRasterCalculator,
+                prepared_type=RasterCalculatorSpec,
+                policy_type=RasterCalculatorPolicy,
+                bind=calculator.bind_raster_calculator,
+                source=None,
+                polygon_inputs=calculator.calculator_polygon_inputs,
+                vector_selections=calculator.calculator_vector_selections,
+                queue=calculator.queue_raster_calculator,
+                prepare=calculator.prepare_raster_calculator,
+                execution=lambda spec, context: (
+                    calculator.raster_calculator_process,
+                    "calculate",
+                    context.aggregate_limits,
+                ),
+                policy=lambda spec: RasterCalculatorPolicy(),
+                result=raster.describe_raster_result,
+                outcome=raster.describe_raster_outcome,
+                primary_input=None,
+                extra_sources=calculator.calculator_raster_sources,
+                execution_inputs=calculator.prepare_raster_calculator_execution,
+                input_adapters=(
+                    (RASTER_FORMULA_INPUT, TypeAdapter(RasterFormulaInput)),
+                ),
+                progress_descriptions=(
+                    ("preparing_rasters", "Aligning input rasters"),
+                    ("calculating_raster", "Calculating raster values"),
+                    ("creating_cog", "Preparing the GeoTIFF"),
+                ),
+            ),
+            ModelOperation[
                 HabitatBulkPreparationInputs,
                 QueuedHabitatBulkPreparation,
                 HabitatBulkPreparationSpec,
@@ -464,7 +517,7 @@ OPERATIONS = MappingProxyType(
                 execution=habitat.select_habitat_execution,
                 policy=habitat.describe_habitat_policy,
                 result=habitat.describe_habitat_result,
-                outcome=raster.describe_clip_outcome,
+                outcome=raster.describe_raster_outcome,
                 primary_input=None,
                 extra_sources=habitat.get_habitat_raster_sources,
                 execution_inputs=habitat.prepare_habitat_execution,
@@ -721,6 +774,35 @@ OPERATIONS = MappingProxyType(
                 input_adapters=(("mask_source", TypeAdapter(StartingMask)),),
                 progress_descriptions=downstream.DOWNSTREAM_PROGRESS_DESCRIPTIONS,
             ),
+            ModelOperation[
+                flow_area.FlowAreaInputs,
+                flow_area.QueuedFlowArea,
+                flow_area.FlowAreaPlan,
+            ](
+                id=flow_area.OPERATION,
+                inputs=(("polygon", "vector"), ("dem", "raster")),
+                parameters=(("upstream", "boolean"), ("downstream", "boolean")),
+                output=OperationOutput(
+                    "mask", "raster", "map", "image/tiff", "Raster mask"
+                ),
+                execution_profile="polygon-flow-area",
+                queued_type=flow_area.QueuedFlowArea,
+                prepared_type=flow_area.FlowAreaPlan,
+                policy_type=flow_area.FlowAreaPolicy,
+                bind=flow.bind_flow_area,
+                source=flow.get_dem_reference,
+                polygon_inputs=lambda request: {},
+                vector_selections=lambda request: {"polygon": request.polygon},
+                queue=lambda request, polygons: flow.queue_flow_area(request),
+                prepare=flow.prepare_flow_area,
+                execution=flow.select_flow_execution,
+                policy=flow.describe_flow_policy,
+                result=flow.describe_flow_result,
+                outcome=flow.describe_flow_outcome,
+                primary_input="dem",
+                execution_inputs=flow.resolve_flow_sources,
+                progress_descriptions=flow.PROGRESS_DESCRIPTIONS,
+            ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",
                 inputs=(("raster", "raster"), ("area", "summary_area")),
@@ -775,8 +857,8 @@ OPERATIONS = MappingProxyType(
                 prepare=raster.prepare_clip,
                 execution=raster.select_clip_execution,
                 policy=raster.describe_clip_policy,
-                result=raster.describe_clip_result,
-                outcome=raster.describe_clip_outcome,
+                result=raster.describe_raster_result,
+                outcome=raster.describe_raster_outcome,
                 progress_descriptions=raster.CLIP_PROGRESS_DESCRIPTIONS,
             ),
         )

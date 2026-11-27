@@ -11,6 +11,7 @@ from pydantic import (
 )
 from eolab_app.processing.aggregate_models import AggregateValue, NamedCalculation
 from eolab_app.processing.models import JobResultResponse
+from eolab_app.processing.temporal_coverage import OptionalObservationLabels
 
 
 class RasterResultGrid(BaseModel):
@@ -49,6 +50,8 @@ class TemporalResultCoverage(BaseModel):
             Missing cell values are reported separately by each output type.
         firstObservation: UTC label of the first available observation used.
         lastObservation: UTC label of the last available observation used.
+        observationLabels: Saved precision and first/last explicit interval starts
+            for sources with prepared date labels.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -56,6 +59,7 @@ class TemporalResultCoverage(BaseModel):
     observationCount: Annotated[int, Field(gt=0)]
     firstObservation: AwareDatetime
     lastObservation: AwareDatetime
+    observationLabels: OptionalObservationLabels = None
 
 
 class PreparedInputCoverage(BaseModel):

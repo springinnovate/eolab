@@ -334,7 +334,8 @@ h5 {
   line-height: 1;
 }
 
-.map-panel-opener::before {
+.map-panel-opener::before,
+#toggle-map-inspection-dock::before {
   content: "";
   inline-size: 7px;
   block-size: 7px;
@@ -3261,7 +3262,7 @@ div.chart-tooltip {
     gap: 0.4rem;
     margin: 0.25rem 0;
 }
-.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children]) {
+.visitor-control-options :is([data-visitor-inspection-children], [data-visitor-workspace-children], [data-visitor-model-children]) {
     min-width: 0;
     margin: 0;
     padding: 0 0 0 1.1rem;
@@ -3508,6 +3509,9 @@ div.chart-tooltip {
   display: flex;
   gap: 6px;
   font-weight: 400;
+}
+.raster-histogram-percentiles .raster-histogram-rescale[hidden] {
+  display: none;
 }
 .raster-histogram-percentiles .raster-histogram-rescale-help,
 .raster-histogram-percentiles .raster-percentile-status {
@@ -4027,6 +4031,9 @@ article.raster-histogram-summary {
   font-size: 0.8rem;
   font-weight: 600;
 }
+.raster-bivariate-style-ranges[data-style-editing="false"] :is(.raster-bivariate-palette-controls, .raster-bivariate-rescale, .raster-bivariate-style-help) {
+  display: none;
+}
 
 .raster-bivariate-style-ranges[open] > summary {
   list-style-type: disclosure-open;
@@ -4244,8 +4251,8 @@ article.raster-histogram-summary {
   font-weight: 600;
   cursor: pointer;
 }
+.analysis-panel-action[hidden] { display: none; }
 .analysis-panel-action:hover:not(:disabled) { background: var(--surface-hover); }
-.analysis-panel-close { padding: 0; line-height: 1; font-size: 1.1rem; }
 @media (pointer: coarse) {
   .analysis-panel-action { min-width: 44px; min-height: 44px; }
 }
@@ -4412,7 +4419,17 @@ article.raster-histogram-summary {
   min-width: 0;
   overflow: clip;
 }
+/* Revealing a tab from overflow must make both buttons focusable immediately. */
+.tool-tab-item, .tool-tab-item > button { transition-property: none; }
+.tool-tab-item {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  box-shadow: inset -1px 0 var(--border-1);
+}
 .tool-tab,
+.tool-tab-close,
 .tool-tab-index {
   flex: 0 0 auto;
   min-height: 32px;
@@ -4426,25 +4443,32 @@ article.raster-histogram-summary {
   cursor: pointer;
 }
 .tool-tab { position: relative; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.tool-tab[data-overflow="true"] { position: absolute; inset-inline-start: 0; visibility: hidden; }
+.tool-tab-item > .tool-tab { flex-shrink: 1; min-width: 0; }
+.tool-tab-close { min-width: 26px; padding: 0 4px; font-size: 1.1rem; }
+.tool-tab:not([data-open="true"]) + .tool-tab-close { display: none; }
+.tool-tab-list > [data-overflow="true"] { position: absolute; inset-inline-start: 0; visibility: hidden; }
 .tool-tab:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .tool-tab:not(:disabled, [aria-selected="true"]):hover,
-.tool-tab-index:hover {
+.tool-tab-index:hover,
+.tool-tab-close:hover {
   background: var(--surface-hover);
   color: var(--brand-hover);
 }
-.tool-tab[aria-selected="true"] {
+.tool-tab-list > .tool-tab[aria-selected="true"],
+.tool-tab-item:has(> [aria-selected="true"]) {
   background: var(--surface-1);
   color: var(--text-1);
   box-shadow: inset 0 3px var(--brand), inset 1px 0 var(--border-1), inset -1px 0 var(--border-1);
 }
+.tool-tab-item > .tool-tab[aria-selected="true"] { color: var(--text-1); }
 .tool-tab-bar button:focus-visible { outline-offset: -3px; }
 .tool-tab-index { position: relative; border-inline-start: 1px solid var(--border-1); }
 .tool-tab-index[data-unread="true"]::after {
   content: ""; position: absolute; inset-block-start: 3px; inset-inline-end: 5px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--brand);
 }
-.tool-tab-menu { font-size: var(--font-size-ui); }
+.tool-tab-menu { grid-template-columns: minmax(0, 1fr) auto; font-size: var(--font-size-ui); }
+.tool-tab-menu [role="menuitemradio"] { grid-column: 1; }
 .tool-tab-menu button {
   position: relative;
   display: grid;
@@ -4461,21 +4485,18 @@ article.raster-histogram-summary {
 }
 .tool-tab-menu button:is(:hover, :focus-visible):not(:disabled) { background: var(--surface-hover); }
 .tool-tab-menu button:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.tool-tab-menu .tool-tab-menu-close { grid-column: 2; min-width: 32px; padding: 4px 8px; place-content: center; font-size: 1.1rem; }
 .tool-tab-menu button[aria-checked="true"]::after {
   content: "✓" / ""; position: absolute; inset: 6px 8px auto auto; color: var(--brand-press);
 }
 .tool-tab-menu small { color: var(--text-2); font-size: var(--font-size-support); }
-.analysis-result-close { display: none; align-self: center; flex: none; }
-#map-inspection[data-active-tool="histogram"] #close-map-histogram,
-#map-inspection[data-active-tool="raster-series"] #close-raster-series,
-#map-inspection[data-active-tool="feature"] #close-vector-inspector { display: inline-flex; }
-
+.tool-tab-item[hidden],
 .tool-tab[hidden],
 .tool-tab-index[hidden],
 .tool-tab-menu [hidden] { display: none; }
 @media (pointer: coarse) {
-  .tool-tab, .tool-tab-index, .tool-tab-menu button,
-  .tool-tab-bar .analysis-result-close { min-height: 44px; min-width: 44px; }
+  .tool-tab, .tool-tab-close, .tool-tab-index, .tool-tab-menu button { min-height: 44px; min-width: 44px; }
+  .tool-tab-menu .tool-tab-menu-close { min-width: 44px; }
 }
 
 .map-inspection-panels {

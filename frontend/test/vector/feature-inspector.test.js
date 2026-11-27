@@ -13,7 +13,19 @@ import { normalizeVectorStyle } from "../../src/vector/style.js";
 const POLYGON_STYLE = normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#228b22", fillOpacity: 0.6,
   strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 1 });
 
-test("renaming a layer updates inspected feature labels without another query", async () => {
+/** Deliver Escape to the fake document with the control where the key was pressed.
+ * @param {FakeRasterControlDocument} documentContext Document with the delegated keyboard listener.
+ * @param {EventTarget} origin Original keyboard event target.
+ * @return {Event} Dispatched event for checking whether dismissal handled it.
+ */
+function pressEscape(documentContext, origin) {
+  const event = new Event("keydown", { bubbles: true, cancelable: true });
+  Object.defineProperties(event, { key: { value: "Escape" }, target: { value: origin } });
+  documentContext.dispatchEvent(event);
+  return event;
+}
+
+test("renaming a layer updates inspected feature labels without another query", async t => {
   let reads = 0;
   const h = createFixture(async () => {
     reads++;
@@ -23,11 +35,24 @@ test("renaming a layer updates inspected feature labels without another query", 
   });
   await h.controller.inspect(inspectionEvent(12, 24));
   const previousReads = reads;
+  const currentChanges = t.mock.method(h.controller, "onCurrentObservationChange");
   h.targets[0] = { ...h.targets[0], label: "Workshop habitats" };
   h.controller.syncVisibleLayers();
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent, "Workshop habitats");
   assert.equal(reads, previousReads);
   assert.equal(h.controller.results[0].target.sourceId, "catalog|parcels");
+  const visibleHighlight = h.wmsHighlights.at(-1);
+  h.documentContext.querySelector("#close-vector-inspector").click();
+  assert.equal(h.removedLayers.at(-1), visibleHighlight);
+  const highlightCount = h.wmsHighlights.length;
+  h.targets[0] = { ...h.targets[0], label: "Renamed after dismissal" };
+  h.controller.syncVisibleLayers();
+  assert.equal(h.wmsHighlights.length, highlightCount, "a label edit must not draw a dismissed highlight");
+  assert.equal(h.currentObservationChanges.at(-1).layerLabel, "Renamed after dismissal");
+  assert.equal(h.sampleChanges.at(-1).observations[0].layerLabel, "Renamed after dismissal");
+  assert.equal(h.sampleChangeKinds.at(-1), "labels");
+  assert.equal(currentChanges.mock.calls.at(-1).arguments[2], "labels");
+  assert.equal(reads, previousReads);
   h.controller.destroy();
 });
 
@@ -48,7 +73,6 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
-  documentContext.querySelector("#map-inspection-tab-bar").append(documentContext.querySelector("#close-vector-inspector"));
   documentContext.querySelector("#vector-feature-result").hidden = true;
   documentContext.querySelector("#open-vector-time-series").disabled = true;
   documentContext.querySelector("#open-vector-feature-profile").disabled = true;
@@ -63,6 +87,9 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
       primaryGeometry: "geometry",
     },
   ];
+  const selectionTargets = [{ key: "catalog|parcels", label: "Parcels",
+    selection: {collectionId: "vectors", itemId: "parcels", assetKey: "data", layerName: "parcels", filter: {}} }];
+  const displays = [];
   const handlers = new Map();
   const removedLayers = [];
   const mapContainer = documentContext.createElement();
@@ -120,6 +147,7 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
   };
   const inspectionChanges = [];
   const sampleChanges = [];
+  const sampleChangeKinds = [];
   const selectionNavigation = [];
   const currentObservationChanges = [];
   const currentNavigationChanges = [];
@@ -131,13 +159,15 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
     leaflet,
     leafletMap,
     getVisibleTargets: () => targets,
+    getSelectionTargets: () => selectionTargets,
+    onSelectionDisplayChange: display => displays.push(display),
     getFieldDisplay,
     wmsUrl: "/geoserver/eolab/wms",
     onInspectionChange: (visible) => {
       inspectionChanges.push(visible);
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
-    onSampleChange: (sample) => sampleChanges.push(sample),
+    onSampleChange: (sample, kind) => { sampleChanges.push(sample); sampleChangeKinds.push(kind); },
     onSelectionNavigationChange: (navigation) => selectionNavigation.push(navigation),
     onCurrentObservationChange: (observation, navigation) => {
       currentObservationChanges.push(observation);
@@ -159,12 +189,15 @@ function createFixture(fetchImplementation, { now = () => 0, getFieldDisplay = (
     leafletMap,
     documentContext,
     targets,
+    selectionTargets,
+    displays,
     handlers,
     highlights,
     wmsHighlights,
     removedLayers,
     inspectionChanges,
     sampleChanges,
+    sampleChangeKinds,
     selectionNavigation,
     currentObservationChanges,
     currentNavigationChanges,
@@ -267,6 +300,306 @@ function inspectionEvent(x, y, longitude = 5, latitude = 5) {
   };
 }
 
+const lassoPolygon = {type: "Polygon", coordinates: [[[0, 0], [8, 0], [8, 8], [0, 0]]]};
+
+test("Lasso reads exact attributes from a hidden source with click picking disabled", async t => {
+  const ids = ["-7", "2147483648", "9007199254740993"];
+  const requests = [];
+  const h = createFixture(async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({url, body});
+    return {ok: true, json: async () => ({
+      matched: 3, featureIds: ids, geometry: null, features: ids.map((id, index) => ({id,
+        properties: {name: ["First CO2", "Second CO2", "Café"][index], x: index + 1, y: index === 1 ? null : 8 - index,
+          geometry: "terrace", bbox: 4.5, the_geom: "ridge", boundedBy: 0}}))})};
+  });
+  t.after(() => h.controller.destroy());
+  h.targets.splice(0);
+  h.controller.setPickingEnabled(false);
+  await h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+  const sample = h.sampleChanges.at(-1);
+  assert.equal(sample.state, "ready");
+  assert.equal(sample.position, null);
+  assert.deepEqual(sample.observations.map(row => [row.featureId, row.properties.x, row.properties.y, row.focus]),
+    [[ids[0], 1, 8, null], [ids[1], 2, null, null], [ids[2], 3, 6, null]]);
+  assert.deepEqual(h.documentContext.querySelector("#vector-feature-attributes").children.map(cell => cell.textContent),
+    ["Feature ID", "-7", "name", "First CO2", "x", "1", "y", "8",
+      "geometry", "terrace", "bbox", "4.5", "the_geom", "ridge", "boundedBy", "0"]);
+  assert.deepEqual(requests.map(request => request.url), ["/api/vector-sampling/lasso"]);
+  assert.equal(h.wmsHighlights.length, 0);
+  assert.equal(h.documentContext.querySelector("#open-vector-time-series").disabled, false);
+  assert.equal(h.documentContext.querySelector("#zoom-inspected-vector-feature").disabled, true);
+  assert.deepEqual(h.displays.at(-1), {polygon: lassoPolygon, geometry: null, count: 3, label: "Parcels"});
+  h.controller.close();
+  h.controller.showResult(2);
+  assert.equal(h.currentObservationChanges.at(-1).featureId, ids[2]);
+  h.selectionTargets[0].label = "Hidden parcels";
+  h.controller.syncVisibleLayers();
+  assert.equal(h.currentObservationChanges.at(-1).layerLabel, "Hidden parcels");
+  assert.equal(h.displays.at(-1).label, "Hidden parcels");
+  assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
+    "3 features selected in Hidden parcels. Map highlights are unavailable; attributes and plots are ready.");
+  assert.equal(h.sampleChanges.at(-1).message, h.documentContext.querySelector("#vector-feature-status").textContent);
+  assert.equal(h.controller.results.length, 3);
+  h.selectionTargets.splice(0);
+  h.controller.syncVisibleLayers();
+  assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+  assert.equal(h.controller.results.length, 0);
+  assert.equal(h.displays.at(-1), null);
+});
+
+test("renaming Lasso layers refreshes active and restored status without another read", async t => {
+  for (const count of [0, 1]) await t.test(`${count} selected`, async t => {
+    let reads = 0;
+    const h = createFixture(async (url, options) => {
+      reads++;
+      const {selection} = JSON.parse(options.body);
+      const ids = selection.itemId === "other" ? ["2"] : count ? ["1"] : [];
+      return Response.json({matched: ids.length, featureIds: ids, geometry: null,
+        features: ids.map(id => ({id, properties: {rank: Number(id)}}))});
+    });
+    t.after(() => h.controller.destroy());
+    const original = h.selectionTargets[0];
+    h.selectionTargets.push({key: "catalog|other", label: "Other layer", selection: {...original.selection, itemId: "other"}});
+    for (const target of h.selectionTargets) {
+      await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+    }
+    const completedReads = reads;
+    original.label = h.targets[0].label = "Renamed parcels";
+    h.controller.syncVisibleLayers();
+    h.controller.navigateSelection("previous");
+    for (const label of ["Renamed parcels", "Latest parcels"]) {
+      original.label = h.targets[0].label = label;
+      h.controller.syncVisibleLayers();
+      const message = `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
+        (count ? " Map highlights are unavailable; attributes and plots are ready." : "");
+      assert.equal(h.displays.at(-1).label, label);
+      assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent, message);
+      assert.equal(h.sampleChanges.at(-1).message, message);
+      h.controller.navigateSelection("next");
+      h.controller.navigateSelection("previous");
+      assert.equal(h.sampleChanges.at(-1).message, message);
+    }
+    assert.equal(reads, completedReads);
+  });
+});
+
+test("cancelled Lasso restores the completed selection and Clear rejects late attributes", async t => {
+  let finishAttributes;
+  let pending = false;
+  const h = createFixture(async url => {
+    if (!url.endsWith("/lasso")) return {ok: true, json: async () => ({
+      type: "FeatureCollection", features: [{type: "Feature", id: "parcels.1", properties: {rank: 1}, geometry: null}],
+    })};
+    const response = {ok: true, json: async () => ({matched: 1, featureIds: ["2"], geometry: null,
+      features: [{id: "2", properties: {rank: 2}}]})};
+    if (!pending) return response;
+    return new Promise(resolve => {finishAttributes = () => resolve(response);});
+  });
+  t.after(() => h.controller.destroy());
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const original = h.sampleChanges.at(-1);
+  pending = true;
+  const abort = new AbortController();
+  const selection = h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, abort.signal);
+  await new Promise(setImmediate);
+  h.controller.setPickingEnabled(false);
+  assert.equal(h.sampleChanges.at(-1).state, "loading", "Click acquisition must not cancel Lasso");
+  abort.abort();
+  assert.deepEqual(h.sampleChanges.at(-1).observations, original.observations);
+  finishAttributes();
+  await assert.rejects(selection, {name: "AbortError"});
+  pending = false;
+  await h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+  h.controller.navigateSelection("previous");
+  assert.equal(h.currentObservationChanges.at(-1).featureId, "parcels.1");
+  assert.equal(h.displays.at(-1), null);
+  h.controller.navigateSelection("next");
+  assert.equal(h.currentObservationChanges.at(-1).featureId, "2");
+  assert.equal(h.displays.at(-1).count, 1);
+  pending = true;
+  const late = h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+  await new Promise(setImmediate);
+  h.controller.clearSelection();
+  finishAttributes();
+  await assert.rejects(late, {name: "AbortError"});
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+  assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: false, canNext: false});
+  assert.equal(h.displays.at(-1), null);
+});
+
+test("click display IDs never replace a different native feature's Lasso history", async t => {
+  for (const displayId of ["parcels.1", "1", 1]) await t.test(`display ID ${JSON.stringify(displayId)}`, async t => {
+    const h = createFixture(async url => ({ok: true, json: async () => {
+      if (url.endsWith("/lasso")) return {matched: 1, featureIds: ["1"], geometry: null,
+        features: [{id: "1", properties: {rank: 200}}]};
+      return {type: "FeatureCollection", features: [{type: "Feature", id: displayId,
+        geometry: null, properties: {rank: 10}}]};
+    }}));
+    t.after(() => h.controller.destroy());
+    await h.controller.inspect(inspectionEvent(12, 24));
+    const select = () => h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+    await select();
+    assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: true, canNext: false});
+    await select();
+    h.controller.navigateSelection("previous");
+    assert.equal(h.currentObservationChanges.at(-1).featureId, displayId);
+    assert.equal(h.currentObservationChanges.at(-1).properties.rank, 10);
+    h.controller.navigateSelection("next");
+    assert.equal(h.currentObservationChanges.at(-1).featureId, "1");
+    assert.equal(h.currentObservationChanges.at(-1).properties.rank, 200);
+  });
+});
+
+test("empty and failed Lasso replacements never leave stale attributes in plots", async t => {
+  let outcome = "ready";
+  let reads = 0;
+  const h = createFixture(async () => {
+    reads++;
+    if (outcome === "error") return Response.json({detail: "This result has expired."}, {status: 410});
+    if (outcome === "empty") return Response.json({matched: 0, featureIds: [], features: [], geometry: null});
+    return Response.json({matched: 2, featureIds: ["1", "2"], geometry: null,
+      features: [{id: "1", properties: {rank: 1}}, {id: "2", properties: {rank: 2}}]});
+  });
+  t.after(() => h.controller.destroy());
+  const select = () => h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, new AbortController().signal);
+  await select();
+  outcome = "empty";
+  await select();
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+  assert.equal(h.currentObservationChanges.at(-1), null);
+  assert.equal(h.displays.at(-1).count, 0);
+  const previous = h.documentContext.querySelector("#previous-vector-selection");
+  const next = h.documentContext.querySelector("#next-vector-selection");
+  const compare = h.documentContext.querySelector("#open-vector-time-series");
+  assert.equal(compare.disabled, true);
+  assert.equal(previous.disabled, false);
+  previous.dispatchEvent(new Event("click"));
+  assert.equal(h.currentObservationChanges.at(-1).featureId, "1");
+  assert.equal(compare.disabled, false);
+  assert.equal(next.disabled, false);
+  next.dispatchEvent(new Event("click"));
+  assert.equal(h.displays.at(-1).count, 0);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
+    "Restoring zero Lasso matches keeps Previous selection reachable");
+  assert.equal(next.disabled, true);
+  previous.dispatchEvent(new Event("click"));
+  assert.equal(reads, 2, "History in Features restores both selections without another read");
+  outcome = "error";
+  await assert.rejects(select(), /expired/);
+  assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
+  assert.equal(h.sampleChanges.at(-1).observations.length, 0);
+  assert.equal(h.displays.at(-1), null);
+  h.controller.navigateSelection("previous");
+  assert.equal(h.currentObservationChanges.at(-1).featureId, "1");
+  h.selectionTargets[0].selection.filter = {rules: [{field: "rank", operator: "gt", value: 5}]};
+  h.controller.syncVisibleLayers();
+  assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+  assert.equal(h.selectionNavigation.at(-1).canPrevious, false);
+});
+
+test("Lasso history distinguishes empty views and exact native membership within one view", async t => {
+  let ids = ["1", "9007199254740992"];
+  const h = createFixture(async () => Response.json({matched:ids.length, featureIds:ids, geometry:null,
+    features:ids.map(id => ({id, properties:{}}))}));
+  t.after(() => h.controller.destroy());
+  const parcels = h.selectionTargets[0];
+  const basins = {...parcels, key:"view-2", label:"Basins"};
+  const ridges = {...parcels, key:"view-3", label:"Ridges"};
+  h.selectionTargets.push(basins, ridges);
+  const lasso = target => h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+  await lasso(parcels);
+  ids = ["1", "9007199254740993"];
+  await lasso(parcels);
+  ids = [];
+  await lasso(basins);
+  await lasso(basins);
+  await lasso(ridges);
+
+  h.controller.navigateSelection("previous");
+  assert.equal(h.displays.at(-1).label, "Basins");
+  assert.equal(h.displays.at(-1).count, 0);
+  for (const lastId of ["9007199254740993", "9007199254740992"]) {
+    h.controller.navigateSelection("previous");
+    assert.deepEqual(h.sampleChanges.at(-1).observations.map(row => row.featureId), ["1", lastId]);
+  }
+  assert.equal(h.selectionNavigation.at(-1).canPrevious, false);
+});
+
+test("invalidated Lasso history keeps earlier and later selections on their own sides", async t => {
+  for (const change of ["remove", "filter"]) for (const index of [0, 1, 2]) {
+    await t.test(`${change} selection ${index + 1}`, async t => {
+      const h = createFixture(async (url, options) => {
+        const {selection} = JSON.parse(options.body);
+        const id = selection.itemId;
+        return Response.json({matched: 1, featureIds: [id], geometry: null,
+          features: [{id, properties: {rank: Number(id)}}]});
+      });
+      t.after(() => h.controller.destroy());
+      const original = h.selectionTargets[0];
+      h.selectionTargets.splice(0, 1, ...["1", "2", "3"].map(id => ({
+        key: `catalog|${id}`, label: `Layer ${id}`, selection: {...original.selection, itemId: id},
+      })));
+      for (const target of h.selectionTargets) {
+        await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+      }
+      for (let position = 2; position > index; position--) h.controller.navigateSelection("previous");
+      if (change === "remove") h.selectionTargets.splice(index, 1);
+      else h.selectionTargets[index].selection.filter = {rules: [{field: "rank", operator: "gt", value: 9}]};
+      const retained = t.mock.method(h.controller, "getSelectionTargets");
+      const visible = t.mock.method(h.controller, "getVisibleTargets");
+      h.controller.syncVisibleLayers();
+      h.controller.syncVisibleLayers();
+      assert.equal(retained.mock.callCount(), 2, "Each refresh reads each source list once for the whole history");
+      assert.equal(visible.mock.callCount(), 2);
+      assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+      assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: index > 0, canNext: index < 2});
+      if (index > 0) {
+        h.controller.navigateSelection("previous");
+        assert.equal(h.currentObservationChanges.at(-1).properties.rank, index);
+      }
+      if (index < 2) {
+        h.controller.navigateSelection("next");
+        assert.equal(h.currentObservationChanges.at(-1).properties.rank, index + 2);
+      }
+    });
+  }
+});
+
+test("cancelling after the first history entry expires preserves forward selections", async t => {
+  for (const action of ["abort", "close"]) await t.test(action, async t => {
+    let finishRead;
+    let pending = false;
+    const h = createFixture(async (url, options) => {
+      const {selection} = JSON.parse(options.body);
+      const response = Response.json({matched: 1, featureIds: ["1"], geometry: null,
+        features: [{id: "1", properties: {name: selection.itemId}}]});
+      if (pending) return new Promise(resolve => { finishRead = () => resolve(response); });
+      return response;
+    });
+    t.after(() => h.controller.destroy());
+    const original = h.selectionTargets[0];
+    h.selectionTargets.push({key: "catalog|later", label: "Later layer", selection: {...original.selection, itemId: "later"}});
+    for (const target of h.selectionTargets) {
+      await h.controller.inspectLasso(target, lassoPolygon, new AbortController().signal);
+    }
+    h.controller.navigateSelection("previous");
+    h.selectionTargets.shift();
+    h.controller.syncVisibleLayers();
+    pending = true;
+    const abort = new AbortController();
+    const reading = h.controller.inspectLasso(h.selectionTargets[0], lassoPolygon, abort.signal);
+    await new Promise(setImmediate);
+    if (action === "abort") abort.abort();
+    else h.controller.close();
+    finishRead();
+    await assert.rejects(reading, {name: "AbortError"});
+    assert.deepEqual(h.selectionNavigation.at(-1), {canPrevious: false, canNext: true});
+    h.controller.navigateSelection("next");
+    assert.equal(h.currentObservationChanges.at(-1).properties.name, "later");
+  });
+});
+
 test("feature queries keep the clicked location across Mercator zooms and map sizes", async () => {
   const circumference = 2 * Math.PI * 6378137;
   const h = createFixture(async (_url, { body }) => {
@@ -358,9 +691,12 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
   assert.deepEqual(vectorFeatureAttributes({ id: "parcels.1", properties: {
     geometry: "not displayed",
     bbox: [0, 0, 1, 1],
+    the_geom: "map geometry",
+    boundedBy: "map bounds",
+    parcel_shape: "declared geometry",
     habitat: "wetland",
     rank: 2,
-  } }, "geometry"), [
+  } }, "parcel_shape"), [
     { name: "Feature ID", value: "parcels.1" },
     { name: "habitat", value: "wetland" },
     { name: "rank", value: "2" },
@@ -426,8 +762,24 @@ test("the inspector heading follows returned IDs and clears with the results", a
   assert.equal(heading.textContent, "Feature inspector (FID 0)");
   assert.equal(heading.title, heading.textContent);
 
+  const plottedFeature = h.currentObservationChanges.at(-1);
   h.documentContext.querySelector("#close-vector-inspector")
     .dispatchEvent(new Event("click"));
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.currentObservationChanges.at(-1), plottedFeature, "closing Features keeps the plotted observation");
+  assert.equal(heading.textContent, "Feature inspector (FID 0)", "Closing details retains the selection used by plots");
+  assert.equal(h.controller.results.length, 3);
+  h.controller.showResult(0);
+  assert.equal(h.currentObservationChanges.at(-1).featureId, qualifiedId);
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const observationBeforeEscape = h.currentObservationChanges.at(-1);
+  const panel = h.documentContext.querySelector("#vector-feature-inspector");
+  panel.append(next);
+  next.focus();
+  pressEscape(h.documentContext, next);
+  assert.equal(panel.hidden, true);
+  assert.equal(h.currentObservationChanges.at(-1), observationBeforeEscape, "Escape keeps the same plotted feature");
+  h.controller.clearSelection();
   assert.equal(heading.textContent, "Feature inspector");
   assert.equal(heading.title, heading.textContent);
   h.controller.destroy();
@@ -525,7 +877,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   );
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-action-help").textContent,
-    "Compare numeric fields across the features at this location.",
+    "Compare numeric fields across the selected features.",
   );
   h.documentContext.querySelector("#open-vector-time-series")
     .dispatchEvent(new Event("click"));
@@ -559,8 +911,14 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(styleButton.getAttribute("aria-label"), "Style Parcels");
   styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
+  h.controller.setStyleEditingEnabled(false);
   h.controller.navigateResult("previous");
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "First");
+  assert.equal(styleButton.hidden, true);
+  styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
+  h.controller.setStyleEditingEnabled(true);
+  assert.equal(styleButton.hidden, false);
   assert.deepEqual(h.currentNavigationChanges.at(-1), {
     position: 1,
     total: 2,
@@ -716,7 +1074,7 @@ test("one feature explains why plotting across features is unavailable", async (
   );
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-action-help").textContent,
-    "Click a location with at least two features to compare their fields.",
+    "Select at least two features with Picker or Lasso to compare their fields.",
   );
 });
 
@@ -782,7 +1140,8 @@ test("an empty click clears and closes a previous feature result", async () => {
   h.controller.navigateSelection("next");
   assert.equal(h.sampleChanges.at(-1).state, "empty");
   assert.deepEqual(h.sampleChanges.at(-1).position, { lng: 6, lat: 7 });
-  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, false,
+    "Browsing back to an empty map click keeps the open history controls visible");
   assert.equal(h.removedLayers.length, 2);
   assert.equal(reads, 2, "browsing saved results does not inspect again");
 });
@@ -847,6 +1206,35 @@ test("selection history restores the highlighted feature and drops only the repl
   h.controller.navigateSelection("next");
   assert.deepEqual(h.sampleChanges.at(-1).observations.map(o => o.properties.rank), [5, 6]);
   assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: true, canNext: false });
+});
+
+test("closing Features retains partial observations and failed layers when another read is pending", async () => {
+  let finishLastRead;
+  const h = createFixture(async (_url, { body }) => {
+    if (body.get("layers") === "eolab:slow") return new Promise(resolve => { finishLastRead = resolve; });
+    if (body.get("layers") === "eolab:offline") return { ok: false, status: 503 };
+    return { ok: true, json: async () => ({ type: "FeatureCollection", features: [
+      { type: "Feature", geometry: null, properties: { area: 19 } },
+      { type: "Feature", geometry: null, properties: { area: 43 } },
+    ] }) };
+  });
+  for (const name of ["slow", "offline"]) {
+    const target = h.targets[0];
+    h.targets.push({ ...target, sourceId: name, publication: { ...target.publication, layerName: "eolab:" + name } });
+  }
+  const inspection = h.controller.inspect(inspectionEvent(1, 1));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
+  h.documentContext.querySelector("#close-vector-inspector").dispatchEvent(new Event("click"));
+  const sample = h.sampleChanges.at(-1);
+  assert.equal(sample.state, "interrupted");
+  assert.equal(sample.failedLayers, 1);
+  assert.deepEqual(sample.observations.map(row => row.properties.area), [19, 43]);
+  assert.match(sample.message, /stopped before all layers/i);
+  finishLastRead({ ok: true, json: async () => ({ type: "FeatureCollection", features: [] }) });
+  assert.equal(await inspection, false);
+  assert.equal(h.sampleChanges.at(-1), sample);
+  h.controller.destroy();
 });
 
 test("returning to a completed selection supersedes pending reads and skips failed reads", async () => {
@@ -1024,7 +1412,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 
-test("Escape on the result-header close button cancels inspection and clears the feature", async () => {
+test("Escape dismisses a pending inspection and keeps map-originated focus on the map", async () => {
   let signal;
   const h = createFixture((_url, options) => {
     signal = options.signal;
@@ -1036,9 +1424,7 @@ test("Escape on the result-header close button cancels inspection and clears the
   const close = h.documentContext.querySelector("#close-vector-inspector");
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").contains(close), false);
   close.focus();
-  const event = new Event("keydown", { cancelable: true });
-  Object.defineProperty(event, "key", { value: "Escape" });
-  h.documentContext.dispatchEvent(event);
+  const event = pressEscape(h.documentContext, close);
   await pending;
   assert.equal(event.defaultPrevented, true);
   assert.equal(signal.aborted, true);
@@ -1046,6 +1432,18 @@ test("Escape on the result-header close button cancels inspection and clears the
   assert.equal(h.documentContext.querySelector("#vector-feature-result").hidden, true);
   assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
   assert.equal(h.documentContext.activeElement, h.mapContainer);
+  const nextInspection = h.controller.inspect(inspectionEvent(3, 4));
+  const survivingTab = h.documentContext.createElement("button");
+  close.addEventListener("click", () => survivingTab.focus());
+  h.mapContainer.focus();
+  const plotControl = h.documentContext.createElement("button");
+  assert.equal(pressEscape(h.documentContext, plotControl).defaultPrevented, false,
+    "an Escape from another tool still belongs to it after it returns focus to the map");
+  assert.equal(signal.aborted, false);
+  pressEscape(h.documentContext, h.mapContainer);
+  assert.equal(await nextInspection, false);
+  assert.equal(h.documentContext.activeElement, h.mapContainer, "the dock must not take focus from the map");
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
   h.controller.destroy();
 });
 
@@ -1081,7 +1479,7 @@ test("changing the visible vector set invalidates results but retains inspection
   h.controller.syncVisibleLayers();
   assert.equal(
     h.documentContext.querySelector("#vector-feature-status").textContent,
-    "Visible vector layers changed. Click the map to sample again.",
+    "The selected layer or filter changed. Use Picker or Lasso to select features again.",
   );
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
   assert.deepEqual(h.selectionNavigation.at(-1), { canPrevious: false, canNext: false });
@@ -1140,6 +1538,11 @@ test("unavailable feature location keeps attributes and explains the rejected zo
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "Feature location is unavailable. The map has not moved.");
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "Selected parcel");
+  h.targets[0] = {...h.targets[0], label: "Renamed parcels"};
+  h.controller.syncVisibleLayers();
+  assert.equal(zoom.disabled, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Feature location is unavailable. The map has not moved.");
   h.controller.destroy();
 });
 

@@ -31,10 +31,19 @@ import { habitatSetup } from "./habitat-setup.js";
  * @property {(draft:Object,state:Object)=>boolean} renderModelInput Update presentation and report whether this input is ready.
  */
 
+/** Catalog lookup and map actions supplied by browser composition.
+ * @typedef {Object} ModelCatalogRasters
+ * @property {(titles:string[],signal:AbortSignal)=>Promise<Object[]>} findByTitles Find all mounted rasters for exact published titles.
+ * @property {(item:Object)=>{onMap:boolean,busy:boolean,error:string}} state Read this Item's current display status.
+ * @property {(item:Object)=>Promise<void>} add Show an Item once through the standard Catalog action.
+ */
+
 /** Transport and notifications supplied to one model-owned async session.
  * @typedef {Object} ModelSetupDependencies
  * @property {Object} api Existing Processing API transport; the integration selects its own endpoints.
+ * @property {ModelCatalogRasters["findByTitles"]} [findCatalogRasterTitles] Look up published rasters independently of model input availability.
  * @property {(source:Object,signal?:AbortSignal)=>Promise<Object>} getCatalogItem Read exact Catalog metadata for display.
+ * @property {(selection:Object,signal:AbortSignal)=>Promise<boolean>} showAreaOutline Draw the selected Catalog polygons and zoom to their bounds. Resolves false if unavailable. Aborting removes the outline and cancels a pending display.
  * @property {()=>void} render Request a render while this draft is current.
  * @property {()=>void} closeInputEditor Close an active input editor while this draft is current.
  */
@@ -43,6 +52,7 @@ import { habitatSetup } from "./habitat-setup.js";
  * Model-owned state is opaque to the host. No integration receives a controller,
  * viewer or map object; dependencies expose only transport and explicit UI callbacks.
  * @typedef {Object} ModelSetupIntegration
+ * @property {boolean} [showRunNameHelp=true] Whether to show the shared note about the run name.
  * @property {(model:Object,inputs:Object,context:Object,helpers:{viewportArea:(bounds:Object)=>Object})=>Object} createState Create model-owned state and adjust initial input defaults.
  * @property {(definition:Object)=>Object|undefined} createInput Create an owned input, or defer to ordinary input handling.
  * @property {(draft:Object,name:string,helpers:{captureRaster:(raster:Object,sources:Object[])=>Object})=>Object|undefined} captureInput Capture an owned input, or defer to ordinary capture.

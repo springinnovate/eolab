@@ -314,7 +314,11 @@ def create_app(
         vector_source_resolver,
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
-        comparison_executor=lambda token: compare_selection_job(vector_jobs, token),
+        comparison_executor=partial(
+            compare_selection_job,
+            vector_jobs,
+            max_timeout_seconds=app_global_configuration.jobs_max_timeout_seconds,
+        ),
         extent_executor=ExtentJobs(vector_jobs),
         parcel_executor=ParcelJobs(vector_jobs),
         layer_statistics_executor=LayerStatisticsJobs(vector_jobs),
