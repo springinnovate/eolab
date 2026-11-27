@@ -13,7 +13,7 @@ import { rasterSourceReference } from "../raster-source.js";
  * @property {string} url Catalog entry for the configured source.
  * @property {Array<"predictor"|"response">} roles Roles served by the dataset.
  * @property {Array<"predictor"|"response">} requiredRoles Roles requiring this dataset.
- * @property {Record<string,Array<{bands:string[],requiredDatasets:string[],periods:Record<string,string>}>>} inputsByRole Source bands, dependencies and time periods for the calculations in each role.
+ * @property {Record<string,Array<{variable:string,bands:string[],requiredDatasets:string[],periods:Record<string,string>}>>} inputsByRole Prepared variable names, source bands, dependencies and time periods for the calculations in each role.
  */
 
 /** Serialize one raster identity without carrying display state or file paths.

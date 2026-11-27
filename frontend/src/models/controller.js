@@ -29,6 +29,7 @@ export class ModelsController {
      * @param {Object} dependencies.api Processing API client.
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
+     * @param {import("./model-setup.js").ModelCatalogRasters} [dependencies.catalogRasters] Lookup and display of published input layers.
      * @param {()=>Object} dependencies.getContext Current raster, vector and area choices.
      * @param {(inputs:Object,onCaptured:(id:string)=>void,isCurrent:()=>boolean)=>Promise<void>} [dependencies.bindVectorInputs] Bind local vector selections before saving a recoverable request.
      * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
@@ -55,13 +56,13 @@ export class ModelsController {
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      * @param {(model:Object)=>import("./model-setup.js").ModelSetupIntegration|null} [dependencies.getSetupIntegration] Resolve the installed setup adapter.
      */
-    constructor({api, jobs, view, getContext, getCatalogItem, showAreaOutline, loadTemporalTimes, prepareVector, bindVectorInputs, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getCatalogItem, catalogRasters, showAreaOutline, loadTemporalTimes, prepareVector, bindVectorInputs, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {}, onViewLabel = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         allowedModelIds = null, recoveryScope = "",
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", ""), getSetupIntegration = getModelSetupIntegration}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, bindVectorInputs, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
-        Object.assign(this, {getCatalogItem, showAreaOutline, loadTemporalTimes});
+        Object.assign(this, {getCatalogItem, catalogRasters, showAreaOutline, loadTemporalTimes});
         this.getSetupIntegration = getSetupIntegration;
         this.allowedModelIds = allowedModelIds === null ? null : new Set(allowedModelIds);
         this.recoveryScope = recoveryScope;
@@ -324,6 +325,7 @@ export class ModelsController {
         const current = () => !this.destroyed && this.state.draft === draft;
         this.setupSession = draft.integration?.createSession(draft, {
             api: this.api, getCatalogItem: this.getCatalogItem, showAreaOutline: this.showAreaOutline,
+            ...(this.catalogRasters && {findCatalogRasterTitles: this.catalogRasters.findByTitles}),
             render: () => { if (current()) this.render(); },
             closeInputEditor: () => { if (current()) this.closeVectorFilter(); },
         }) ?? null;
@@ -1132,7 +1134,7 @@ export class ModelsController {
             library: "Choose a tool", setup: this.state.draft?.model.title ?? "Setup",
             runs: "Runs", run: job?.label ?? "Data tool run",
         }[this.state.page]);
-        this.view.render({...this.state, noModelsSelected: this.allowedModelIds?.size === 0,
+        this.view.render({...this.state, catalogRasters: this.catalogRasters, noModelsSelected: this.allowedModelIds?.size === 0,
             duplicateRestricted: !this.#allowsModel(this.state.invocation?.model.id ?? job?.model.id),
             deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
