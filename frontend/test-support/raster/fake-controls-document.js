@@ -55,6 +55,15 @@ export class FakeRasterControlElement extends EventTarget {
         };
     }
 
+    /** Open a modal dialog. @return {void} */
+    showModal() { this.open = true; }
+
+    /** Dismiss a dialog and notify its listeners. @return {void} */
+    close() {
+        this.open = false;
+        this.dispatchEvent(new Event("close"));
+    }
+
     /**
      * Append child elements.
      *

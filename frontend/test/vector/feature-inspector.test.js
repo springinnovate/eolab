@@ -223,7 +223,7 @@ test("the Feature inspector previews names and actual values before formatting t
     ]})};
   }, {getFieldDisplay: key => {
     assert.equal(key, "catalog|parcels");
-    return {fields, numericFields, formats, apply: next => { formats = next; return true; }};
+    return {label: "Parcels", fields, numericFields, formats, apply: next => { formats = next; return true; }};
   }});
   const control = selector => h.documentContext.querySelector(selector);
   const attributeValues = () => control("#vector-feature-attributes").children
@@ -239,6 +239,7 @@ test("the Feature inspector previews names and actual values before formatting t
   const input = "field,display_name,format,decimals,unit,currency\narea_ha,Habitat area,number,1,ha,\nannual_cost,Annual cost,currency,,,USD\ncount,,number,0,sites,\nmissing,,number,1,ha,\ncode,<b>Site code</b>,,,,\nratio,Ratio,,,,";
   await h.controller.inspect(inspectionEvent(12, 24));
   assert.equal(control("#vector-feature-field-display").hidden, false);
+  control("#vector-feature-field-display").click();
   assert.ok(attributeValues().includes("1234.56"));
   file.files = [new File([input], "field-display.csv")];
   file.dispatchEvent(new Event("change"));

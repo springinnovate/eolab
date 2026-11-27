@@ -947,7 +947,7 @@ test("More actions keeps utility actions while frequent actions remain on the co
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const raster = { ...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}, legend: { kind: "fixed", label: "Raster" } };
-  const vector = { ...LAYERS[1], datasetKind: "vector", capabilities: undefined, canFilter: true };
+  const vector = { ...LAYERS[1], datasetKind: "vector", capabilities: undefined, canFilter: true, canEditFieldDisplay: true, visible: false };
   view.render([raster, vector].map(layer => ({...layer,
     styleClipboard: {...layer.styleClipboard, canPaste: true, sourceLabel: "Copied source"}})), null);
   for (const row of doc.querySelector("#raster-layer-list").children) {
@@ -997,6 +997,15 @@ test("More actions keeps utility actions while frequent actions remain on the co
   assert.throws(() => actionControl(vectorRow, "download"), /expected one download/);
   assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].contains(actionControl(vectorRow, "filter")));
   assert.equal(actionControl(vectorRow, "filter").textContent, "Filter");
+  const editor = actionControl(vectorRow, "edit-field-display");
+  assert.equal(editor.textContent, "Edit units and field names");
+  assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].contains(editor));
+  assert.equal(elementsByClass(vectorRow, "map-layer-details")[0].contains(editor), false);
+  const opened = [];
+  view.bind({onEditFieldDisplay: key => opened.push(key)});
+  editor.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [vector.key]);
+  assert.throws(() => actionControl(rasterRow, "edit-field-display"));
 });
 
 test("Download opens the requested raster view while More actions is closed", () => {

@@ -110,6 +110,35 @@ function observation(id, layer = "habitat") {
   });
 }
 
+test("the field editor previews and remembers settings for a hidden layer before any feature is selected", async t => {
+  const {inspector, profile, series, documentContext: doc, records, status} = composition(() => {
+    assert.fail("Editing names and units must not read a feature");
+  });
+  t.after(() => { inspector.destroy(); profile.destroy(); series.destroy(); });
+  const layer = records[0];
+  assert.equal(layer.entry.visible, false);
+  inspector.openFieldEditor(layer.entry.key);
+  const dialog = doc.querySelector("#vector-field-editor");
+  assert.equal(dialog.open, true);
+  assert.equal(doc.querySelector("#vector-field-editor-title").textContent, "Edit units and field names for habitat");
+  const input = doc.querySelector("#import-vector-field-formats");
+  input.files = [new Blob(["field,display_name,format,decimals,unit,currency\nx,Habitat area,number,1,ha,"])];
+  input.dispatchEvent(new Event("change"));
+  await nextTurn();
+  const row = doc.querySelector("#vector-field-format-rows").children[0];
+  assert.deepEqual(row.children.map(cell => cell.textContent), ["x", "x", "Habitat area", "Default", "Number, 1 decimal place, ha"]);
+  assert.equal(layer.fieldFormats, undefined);
+  doc.querySelector("#apply-vector-field-formats").click();
+  assert.deepEqual(layer.fieldFormats, {x: {displayName: "Habitat area", format: "number", decimals: 1, unit: "ha"}});
+  assert.equal(records[1].fieldFormats, undefined);
+  assert.equal(status.remembered, true);
+  assert.equal(layer.entry.visible, false);
+  inspector.setStyleEditingEnabled(false);
+  assert.equal(dialog.open, false);
+  inspector.openFieldEditor(layer.entry.key);
+  assert.equal(dialog.open, false);
+});
+
 test("inspection composition delivers distinct observations to both chart consumers", t => {
   const {inspector, profile, series, documentContext, status, mapActions} = composition();
   t.after(() => { profile.destroy(); series.destroy(); });
@@ -259,6 +288,7 @@ test("Lasso attributes feed real scatterplots and remain available after closing
   assert.equal(doc.querySelector("#vector-feature-profile-feature-list").children.length, 0);
   assert.equal(doc.querySelector("#vector-feature-field-display").hidden, false,
     "A hidden source still supplies editable field display settings");
+  doc.querySelector("#vector-feature-field-display").click();
   const fieldImport = doc.querySelector("#import-vector-field-formats");
   fieldImport.files = [new Blob(["field,display_name,format,decimals,unit,currency\nx,Area,number,1,ha,\n"])];
   fieldImport.dispatchEvent(new Event("change"));
