@@ -330,6 +330,26 @@ export class ProcessingApiClient {
         return this.request("/raster-calculations/validate", "POST", { alias: "a", calculations }, signal);
     }
 
+    /** Capture original features for a model and return their private input reference.
+     * @param {Object} collection Committed GeoJSON with feature IDs, properties and polygons.
+     * @return {Promise<Object>} Validated opaque ID and checksum of the captured source.
+     * @throws {Error} If capture fails or the reference is malformed.
+     */
+    async captureVectorInput(collection) {
+        await this.ensureSession();
+        return validatePolygonAreaReference(await this.request("/vector-inputs", "POST", collection));
+    }
+
+    /** Release this session's staging reference after an abandoned or rejected run.
+     * @param {string} id Private input ID returned by captureVectorInput.
+     * @return {Promise<Object>} Idempotent deletion acknowledgement.
+     * @throws {Error} If deletion fails.
+     */
+    async discardVectorInput(id) {
+        await this.ensureSession();
+        return this.request(`/vector-inputs/${validateProcessingId(id)}`, "DELETE");
+    }
+
     /** Upload exact polygons once and receive a private, expiring calculation reference.
      * @param {Object[]} polygons GeoJSON Polygon geometries, excluding feature properties.
      * @param {AbortSignal} [signal] Optional cancellation of the upload request.

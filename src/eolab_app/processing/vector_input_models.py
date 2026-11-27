@@ -4,8 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from eolab_app.catalog_selection import VectorSelection
-
+from eolab_app.catalog_selection import ModelVectorSelection
 
 class VectorFieldSelectionRow(BaseModel):
     """Capture one row's attribute names and recipe-defined choice values.
@@ -40,14 +39,14 @@ class VectorFieldSelection(BaseModel):
     source reader or operation when it opens the source, without an admission scan.
 
     Attributes:
-        selection: Path-free Catalog or uploaded source and captured predicate.
+        selection: Path-free vector source and its captured predicate.
         fields: Source attributes chosen for exactly the recipe's configured roles.
         rows: Ordered attribute and choice selections when the recipe enables rows.
             Omitted for ordinary inputs; configured inputs require at least one row.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    selection: VectorSelection
+    selection: ModelVectorSelection
     fields: dict[
         Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
         Annotated[str, Field(strict=True, min_length=1, max_length=256)],

@@ -37,6 +37,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.polygon_areas import (
     PolygonAreaReference,
+    ProcessingInputReference,
     PolygonSummaryInput,
     SummaryPolygon,
     read_polygon_area_input,
@@ -94,10 +95,11 @@ from eolab_app.processing.model_yaml import (
 from eolab_app.source_files import ResolvedSourceFile, finish_source_task
 from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
+    CapturedVectorSelection,
     CatalogSelectionReader,
     SelectionUnavailableError,
     UploadedSelection,
-    VectorSelection,
+    ModelVectorSelection,
     DrawingReference,
     DrawingSelection,
     referenced_layers,
@@ -955,7 +957,7 @@ class ProcessingService:
         request_key: str,
         prepared: PreparedJobPlan,
         request_hash: str,
-        selections: dict[str, VectorSelection],
+        selections: dict[str, ModelVectorSelection],
         upload_owner: str | None,
         raster_sources: tuple[
             RasterAnalysisSourceReference | TemporalIntervalSelection, ...
@@ -985,9 +987,7 @@ class ProcessingService:
             for selection in selections.values()
             for source in (selection, *referenced_layers(selection.filter))
         ):
-            prepared = await self._capture_vector_result_inputs(
-                owner, prepared, selections
-            )
+            prepared = await self._retain_vector_inputs(owner, prepared, selections)
             return await asyncio.to_thread(
                 self.jobs.submit, owner, request_key, prepared, request_hash
             )
@@ -1003,13 +1003,13 @@ class ProcessingService:
             raise result
         return result
 
-    async def _capture_vector_result_inputs(
+    async def _retain_vector_inputs(
         self,
         owner: str,
         prepared: PreparedJobPlan,
-        selections: dict[str, VectorSelection],
+        selections: dict[str, ModelVectorSelection],
     ) -> PreparedJobPlan:
-        """Retain each original vector result used by an accepted calculation.
+        """Capture private features and retain result files referenced by the calculation.
 
         Args:
             owner: Browser's Processing session identity.
@@ -1026,8 +1026,21 @@ class ProcessingService:
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
         drawings = {}
+        collections = {}
         sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
         for selection in sources:
+            if isinstance(selection, CapturedVectorSelection):
+                reference = selection.reference
+                key = reference.model_dump_json()
+                if key not in collections:
+                    collection = await asyncio.to_thread(
+                        self.jobs.get_input, owner, reference.id, reference.sha256
+                    )
+                    if collection.get("type") != "FeatureCollection":
+                        raise ProcessingError(
+                            "invalid_vector_input", "Choose a saved vector layer.", 422
+                        )
+                    collections[key] = collection
             if isinstance(selection, DrawingSelection) and selection.polygonArea:
                 drawing = selection.polygonArea
                 key = drawing.model_dump_json()
@@ -1056,8 +1069,17 @@ class ProcessingService:
                 )
             files.append(file)
             captured.add(identity)
+        retained = {}
         if drawings:
-            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings}, work_key=None)
+            retained["_spatialFilterDrawings"] = drawings
+        if collections:
+            retained["_vectorInputs"] = collections
+        if retained:
+            prepared = replace(
+                prepared,
+                specification={**prepared.specification, **retained},
+                work_key=None,
+            )
         return (
             replace(prepared, input_files=tuple(files), work_key=None)
             if len(files) != len(prepared.input_files)
@@ -1068,7 +1090,7 @@ class ProcessingService:
         self,
         owner: str,
         submissions: list[JobSubmission],
-        selections: list[dict[str, VectorSelection]],
+        selections: list[dict[str, ModelVectorSelection]],
         upload_owner: str | None,
         raster_sources: list[
             tuple[RasterAnalysisSourceReference | TemporalIntervalSelection, ...]
@@ -1118,7 +1140,7 @@ class ProcessingService:
                 prepared = submission.prepared
                 if isinstance(prepared, PreparedJobPlan):
                     try:
-                        prepared = await self._capture_vector_result_inputs(
+                        prepared = await self._retain_vector_inputs(
                             owner, prepared, inputs
                         )
                     except ProcessingError as error:
@@ -1416,6 +1438,29 @@ class ProcessingService:
             )
         return self.changes.subscribe(owner)
 
+    async def capture_vector_input(
+        self, owner: str, collection: dict[str, Any]
+    ) -> ProcessingInputReference:
+        """Store a validated GeoJSON source for use by this browser's model runs.
+
+        Args:
+            owner: Server-derived Processing session identity.
+            collection: Committed drawing including IDs, attributes, order and geometry.
+
+        Returns:
+            Opaque input reference with a checksum over the whole collection.
+
+        Raises:
+            ProcessingError: If temporary input storage is full or unavailable.
+        """
+        checksum = hashlib.sha256(
+            json.dumps(collection, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        identifier = await asyncio.to_thread(
+            self.jobs.save_input, owner, checksum, collection
+        )
+        return ProcessingInputReference(id=identifier, sha256=checksum)
+
     async def upload_polygon_area(
         self, owner: str, polygons: PolygonSummaryInput
     ) -> dict[str, Any]:
@@ -1688,7 +1733,15 @@ class ProcessingService:
             for sources in raster_sources
             for source in sources
         ) or any(
-            isinstance(source, (UploadedSelection, ArtifactVectorSelection, DrawingSelection))
+            isinstance(
+                source,
+                (
+                    UploadedSelection,
+                    ArtifactVectorSelection,
+                    CapturedVectorSelection,
+                    DrawingSelection,
+                ),
+            )
             for inputs in selections
             for selection in inputs.values()
             for source in (selection, *referenced_layers(selection.filter))

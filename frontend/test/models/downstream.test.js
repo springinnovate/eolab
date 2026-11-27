@@ -18,7 +18,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
  */
 function fixture(overrides = {}) {
     const requests = [], filters = [], cancelled = [], values = new Map();
-    const context = {rasters: [structuredClone(raster)], vectors: [{...selection, key: "view:starting-areas", itemId: "starting-areas", label: "Starting areas"}]};
+    const context = {rasters: [structuredClone(raster)], vectors: [{...selection, geometryKind: "polygon", key: "view:starting-areas", itemId: "starting-areas", label: "Starting areas"}]};
     const api = {submitModelRun: async value => { requests.push(value); return job(); }, getJob: async () => job(),
         readModelInvocation: async () => ({model: {...downstreamModel, definition: downstreamModel}, inputs: requests[0].inputs, parameters: requests[0].parameters, label: "Saved run"}), ...overrides};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
@@ -117,7 +117,7 @@ test("duplicate preserves mask, values and formula without a hydrology check or 
         const h = fixture();
         if (uploaded) {
             const source = {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "starting_areas", filter: selection.filter};
-            h.context.vectors = [{...source, key: "view:starting-areas", label: "My starting areas"}];
+            h.context.vectors = [{...source, geometryKind: "polygon", key: "view:starting-areas", label: "My starting areas"}];
             h.controller.prepareVector = async () => ({selection: source, matched: 1, total: 3});
             h.controller.refreshMapLayers();
         }

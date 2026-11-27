@@ -19,7 +19,7 @@ from rasterio.shutil import copy as copy_raster
 from rasterio.transform import Affine
 
 from eolab_app.bounded_vector import PolygonRasterizer
-from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection, ModelVectorSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifacts import write_progress
@@ -43,7 +43,7 @@ class FlowAreaInputs(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     dem: RasterSourceReference
-    polygon: VectorSelection
+    polygon: ModelVectorSelection
     upstream: StrictBool
     downstream: StrictBool
 

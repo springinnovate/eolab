@@ -125,6 +125,7 @@ import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
+import { modelVectorSources, bindModelVectorInputs } from "./model-vector-sources.js";
 import { ModelsController } from "./models/controller.js";
 import { describeRasterSource } from "./raster-source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
@@ -1624,24 +1625,26 @@ async function initializeCatalog(
         const geometry = await vectorSamplingOverlay.load(area);
         if (geometry) resultLocator.setPolygon(area, geometry);
     };
-    /** Read polygon choices for Models, histogram and summary controls.
+    /** Read original vector choices for model setup and polygon analysis.
      * Visibility and WMS publication do not determine numerical selection.
      * @return {Array<{key:string,label:string,sourceOrigin:"catalog"|"upload"|"runArtifact",item:import("./vector/sampling.js").VectorSamplingSource,
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained source identities, immutable fields and applied filter snapshots.
      */
-    const getPolygonTargets = () => mapLayerController.retainedRecords
+    const getVectorTargets = () => mapLayerController.retainedRecords
         .filter(record => record.adapter === vectorMapLayerAdapter)
-        .flatMap(record => {
+        .map(record => {
             const source = record.adapter.describeSource(record);
-            return source.geometryKind === "polygon" ? [{
+            return {geometryKind: source.geometryKind,
                 key: record.entry.key, label: record.entry.label, sourceOrigin: source.origin,
                 item: source.source.kind === "runArtifact" ? source.selection : source.source,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
-            }] : [];
+            };
         });
+    /** Return only polygons for area-based map analysis. @return {Object[]} Compatible map sources. */
+    const getPolygonTargets = () => getVectorTargets().filter(source => source.geometryKind === "polygon");
     /** List retained source layers and committed drawings for the polygon pickers.
      * @return {Object[]} Independent vector descriptors and drawing snapshots.
      */
@@ -1724,29 +1727,23 @@ async function initializeCatalog(
             if (job.status === "deleted") mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.jobId === job.jobId);
         },
         /** Supply original-source choices and current map areas independently of rendering.
-         * @param {Object} [options] Additional input choices requested by model setup.
-         * @param {boolean} [options.includeDrawnPolygons=false] Include detached, filtered snapshots of committed polygon layers.
          * @return {Object} Original raster and vector choices, polygon groups, drawings, area and map bounds.
          */
-        getContext: ({includeDrawnPolygons = false} = {}) => {
+        getContext: () => {
             const viewport = leafletMap.getBounds();
             const layers = mapLayerController.snapshots();
             return {
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
-                    scalarFields: target.scalarFields, numericFields: target.numericFields,
-                    selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
+                vectors: modelVectorSources(getVectorTargets(), annotations?.summaryTargets() ?? []),
                 polygonGroups: polygonGroups?.snapshot() ?? [],
-                drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
-                    key: target.key, label: target.label, total: target.polygons.length,
-                    polygons: annotationSummaryPolygons(target.polygons, target.filter),
-                })) : [],
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
         },
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs,
+            () => annotations?.summaryTargets() ?? [], collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
         /** Read selected features without requiring a display layer.
          * @param {import("./vector/sampling.js").VectorSamplingSource & {filter:Object}} source Original vector identity and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.

@@ -1,4 +1,5 @@
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
+import {modelVectorSources} from "../../src/model-vector-sources.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
@@ -166,18 +167,18 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
             labelFields: [{name: "score", type: "float"}, {name: "Doubled", type: "float"}]}};
     const layers = {retainedRecords: [record], snapshots: () => []};
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
-    const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
-    const {getPolygonTargets, createPolygonSamplingArea} = new Function(
+    const targetsSource = main.slice(main.indexOf("const getVectorTargets ="), main.indexOf("models = new ModelsController({"));
+    const {getVectorTargets, getPolygonTargets, createPolygonSamplingArea} = new Function(
         "mapLayerController", "vectorMapLayerAdapter", "createVectorSamplingArea",
-        `${targetsSource}; return {getPolygonTargets, createPolygonSamplingArea};`
+        `${targetsSource}; return {getVectorTargets, getPolygonTargets, createPolygonSamplingArea};`
     )(layers, adapter, createVectorSamplingArea);
-    const modelOptionsSource = main.slice(main.indexOf("getContext: ({includeDrawnPolygons"),
+    const modelOptionsSource = main.slice(main.indexOf("getContext: () => {", main.indexOf("models = new ModelsController({")),
         main.indexOf("/** Open the existing rule editor inside setup"));
-    const modelOptions = new Function("getPolygonTargets", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
+    const modelOptions = new Function("getVectorTargets", "modelVectorSources", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
         const leafletMap = {getBounds: () => ({getWest: () => -1, getSouth: () => -1, getEast: () => 1, getNorth: () => 1})};
-        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null;
+        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null, annotations = null;
         return {${modelOptionsSource}};
-    `)(getPolygonTargets, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
+    `)(getVectorTargets, modelVectorSources, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
     const requests = [];
     t.mock.method(globalThis, "fetch", async (url, options) => {
         requests.push({url, options});

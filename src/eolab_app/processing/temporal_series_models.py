@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import Artifact
 from eolab_app.polygon_areas import PolygonAreaReference
@@ -32,7 +32,7 @@ class TemporalSeriesRequest(BaseModel):
     statistic: AreaStatistic
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
 

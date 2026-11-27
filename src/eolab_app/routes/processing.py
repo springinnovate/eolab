@@ -36,7 +36,9 @@ from eolab_app.processing.aggregate_models import (
     MAX_CALCULATION_BATCH_BYTES,
     MAX_CALCULATION_ITEM_BYTES,
 )
+from eolab_app.drawings.models import DrawingCollection
 from eolab_app.polygon_areas import (
+    ProcessingInputReference,
     MAX_POLYGON_AREA_BYTES,
     PolygonSummaryInput,
     PolygonAreaUploadResponse,
@@ -110,7 +112,8 @@ class RequestSizeLimitedRoute(APIRoute):
                 return await handler(request)
             limit = (
                 MAX_POLYGON_AREA_BYTES
-                if request.url.path == "/api/processing/polygon-areas"
+                if request.url.path
+                in {"/api/processing/polygon-areas", "/api/processing/vector-inputs"}
                 else (
                     MAX_CALCULATION_BATCH_BYTES
                     if request.url.path == "/api/processing/raster-calculations/batch"
@@ -629,11 +632,40 @@ def create_processing_router(
         """
         return await _download_saved_yaml(job_id, "run-yaml", request, response)
 
+    @router.post(
+        "/vector-inputs",
+        response_model=ProcessingInputReference,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def capture_vector_input(
+        body: DrawingCollection, request: Request, response: Response
+    ) -> ProcessingInputReference:
+        """Save committed drawing features for this browser's model submissions.
+
+        Args:
+            body: Editor GeoJSON with original IDs, names, notes and WGS84 polygons.
+            request: Request carrying the browser's Processing session.
+            response: Response receiving the session cookie and private-cache headers.
+
+        Returns:
+            Expiring private reference covering the complete feature collection.
+
+        Raises:
+            HTTPException: If session, origin, input size or storage checks fail.
+        """
+        owner = get_processing_session_owner_hash(
+            request, response, session_ttl_seconds
+        )
+        return await _await_service_result(
+            service.capture_vector_input(owner, body.model_dump(mode="json"))
+        )
+
+    @router.delete("/vector-inputs/{area_id}", openapi_extra=MUTATION_SCHEMA)
     @router.delete("/polygon-areas/{area_id}", openapi_extra=MUTATION_SCHEMA)
     async def discard_polygon_area(
         area_id: JobId, request: Request, response: Response
     ) -> dict[str, bool]:
-        """Delete uploaded polygons without changing runs already using their own copy.
+        """Release a private input after its owner stops using it for new runs.
 
         Args:
             area_id: The uploaded-area ID to delete.

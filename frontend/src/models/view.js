@@ -4,7 +4,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
-import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer, isModelSpatialInput } from "./inputs.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, isModelSpatialInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
@@ -368,8 +368,6 @@ export class ModelsView {
         const draft = state.draft;
         const references = input.type === "habitat_references";
         const usesRasterOrVector = input.type === "mask_source" || references;
-        const drawn = value.areaMode === "drawnPolygons";
-        const drawnLayer = drawn ? selectedDrawnPolygonLayer(draft, value) : null;
         const runLabel = "Run tool";
         const areaChoices = [{value: "", label: references ? "Choose reference sites…" : input.type === "mask_source" ? "Choose a starting area…" : "Choose an area…"}];
         if (!usesRasterOrVector) areaChoices.push({value: "viewport", label: "Visible map area"}, {value: "samplingArea", label: "Sampling box"});
@@ -383,13 +381,10 @@ export class ModelsView {
             areaChoices.push({value: "captured", label: value.areaOrigin === "run" ? originalLabel : "Selected features"});
         }
         areaChoices.push(...value.vectors.map(source => ({value: `vector:${source.key}`, label: `${source.label} · Polygons`,
-            group: source.sourceOrigin === "upload" ? "Your uploads" : source.sourceOrigin === "runArtifact" ? "Completed runs" : "Catalog layers"})));
+            group: ({"drawing": "Drawn polygons", "upload": "Your uploads", "runArtifact": "Completed runs"})[source.sourceOrigin] ?? "Catalog layers"})));
         if (input.type === "clip_area") {
             areaChoices.push(...value.polygonGroups.map(group => ({value: `polygonGroup:${group.id}`,
                 label: group.name, group: "Polygon groups"})));
-        }
-        if (modelSupportsArea(input.type, {kind: "polygonArea"})) {
-            areaChoices.push(...draft.drawnPolygonLayers.map(layer => ({value: `drawn:${layer.key}`, label: layer.label, group: "Drawn polygons"})));
         }
         if (usesRasterOrVector) {
             const rasters = draft.sources.filter(source => references || source.kind !== "runArtifact");
@@ -399,39 +394,23 @@ export class ModelsView {
                 group: source.kind === "uploadedRaster" ? "Your uploads" : source.kind === "runArtifact" ? "Completed runs" : "Catalog layers", disabled: source.available === false})));
         }
         let selected = value.areaMode;
-        if (drawn) selected = drawnLayer ? `drawn:${drawnLayer.key}` : "";
-        else if (value.areaMode === "polygonGroup") selected = `polygonGroup:${value.polygonGroupId}`;
+        if (value.areaMode === "polygonGroup") selected = `polygonGroup:${value.polygonGroupId}`;
         else if (value.areaMode === "vector") selected = value.vectorKey ? `vector:${value.vectorKey}` : "";
         else if (value.areaMode === "raster") selected = value.maskRaster ? `raster:${modelSourceKey(value.maskRaster)}` : "";
         this.options(controls.source, areaChoices, selected);
         const rasterActive = usesRasterOrVector && value.areaMode === "raster";
         controls.maskGroup.hidden = !rasterActive;
         const selectedVector = value.areaMode === "vector" ? value.vectors.find(source => source.key === value.vectorKey) : null;
-        controls.sourceOrigin.textContent = selectedVector ? selectedVector.sourceOrigin === "upload" ? "Uploaded by you · Polygons"
-            : selectedVector.sourceOrigin === "runArtifact" ? "Completed run · Polygons" : "Catalog · Polygons"
+        controls.sourceOrigin.textContent = selectedVector ? ({"drawing": "Drawn polygons", "upload": "Uploaded by you · Polygons",
+            "runArtifact": "Completed run · Polygons"})[selectedVector.sourceOrigin] ?? "Catalog · Polygons"
             : rasterActive && value.maskRaster ? value.maskRaster.kind === "uploadedRaster" ? "Uploaded by you · Raster mask"
                 : value.maskRaster.kind === "runArtifact" ? "Completed run · Raster" : "Catalog · Raster"
-            : drawn && drawnLayer ? "Drawn polygons" : "";
+            : "";
         controls.sourceOrigin.hidden = !controls.sourceOrigin.textContent;
         controls.source.setAttribute("aria-describedby", [controls.choiceHint?.id ?? "", controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
             rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : ""].filter(Boolean).join(" "));
         controls.rasterReason.textContent = value.maskRaster?.available === false ? "This raster is no longer available. Choose another input." : "";
-        controls.editFilter.hidden = drawn;
-        if (drawn) {
-            controls.vectorGroup.hidden = !drawnLayer;
-            controls.selectionCard.hidden = !drawnLayer;
-            controls.filterHost.hidden = true;
-            controls.mapHelp.hidden = true;
-            controls.mapFilterStatus.textContent = "";
-            controls.areaDescription.hidden = Boolean(drawnLayer);
-            controls.areaDescription.textContent = "Choose a drawn polygon layer from Map contents.";
-            if (!drawnLayer) return false;
-            const matched = drawnLayer.polygons.length;
-            controls.selectedCount.textContent = `${matched} of ${drawnLayer.total} polygons selected`;
-            controls.filterDescription.textContent = "Uses the layer's filter in Map contents.";
-            controls.vectorStatus.textContent = matched ? "" : "No polygons match. Add a polygon or change the layer's filter.";
-            return matched > 0;
-        }
+        controls.editFilter.hidden = Boolean(selectedVector?.editFilterInMap);
         const rasterReady = Boolean(value.maskRaster) && value.maskRaster.available !== false;
         controls.vectorGroup.hidden = value.areaMode !== "vector";
         controls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(value.areaMode);

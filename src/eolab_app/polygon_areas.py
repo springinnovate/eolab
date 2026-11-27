@@ -109,12 +109,16 @@ class PolygonSummaryInput(BaseModel):
         )
 
 
-class PolygonAreaReference(BaseModel):
-    """An expiring browser-owned input ID and the hash of its exact geometry."""
+class ProcessingInputReference(BaseModel):
+    """Identify a temporary private input by its opaque ID and content checksum."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
     sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+
+
+class PolygonAreaReference(ProcessingInputReference):
+    """Identify an expiring polygon area by its geometry checksum."""
 
 
 class PolygonAreaUploadResponse(BaseModel):

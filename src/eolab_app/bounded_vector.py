@@ -28,6 +28,7 @@ from shapely.geometry import mapping, shape
 from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
+    CapturedVectorSelection,
     UploadedSelection,
     ResolvedCatalogSelection,
     SelectionUnavailableError,
@@ -89,13 +90,14 @@ class VectorReadLimits:
 
 
 def resolve_vector_file_selection(
-    path: Path, selection: ArtifactVectorSelection | UploadedSelection
+    path: Path,
+    selection: ArtifactVectorSelection | CapturedVectorSelection | UploadedSelection,
 ) -> ResolvedCatalogSelection:
     """Bind a private vector selection to its authorized original GeoPackage schema.
 
     Args:
         path: Original file retained and confined by its source owner.
-        selection: Path-free upload/result identity, layer, filter and calculated fields.
+        selection: Private source identity, native layer, filter and calculated fields.
 
     Returns:
         Original source and validated attribute programs for ordinary vector readers.

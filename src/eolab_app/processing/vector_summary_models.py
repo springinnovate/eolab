@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.models import Artifact
 
 OPERATION = "vector.summary.v1"
@@ -23,7 +23,7 @@ class VectorSummaryInput(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    selection: VectorSelection
+    selection: ModelVectorSelection
     groupField: FIELD_NAME
 
 

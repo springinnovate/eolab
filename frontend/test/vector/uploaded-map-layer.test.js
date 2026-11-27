@@ -108,9 +108,9 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     controller.setOpacity(key, 0.4);
     controller.setVisible(key, false);
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
-    const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
+    const targetsSource = main.slice(main.indexOf("const getVectorTargets ="), main.indexOf("models = new ModelsController({"));
     const getPolygonTargets = new Function("mapLayerController", "vectorMapLayerAdapter", `${targetsSource}; return getPolygonTargets;`)(controller, adapter);
-    assert.deepEqual(getPolygonTargets(), [{ key, label: "My wetlands", item: { uploadId: UPLOAD.id }, sourceOrigin: "upload",
+    assert.deepEqual(getPolygonTargets(), [{ key, label: "My wetlands", geometryKind: "polygon", item: { uploadId: UPLOAD.id }, sourceOrigin: "upload",
         fields: adapter.describeSource(record).fields, scalarFields: adapter.describeSource(record).scalarFields,
         numericFields: adapter.describeSource(record).numericFields, selection: {uploadId: UPLOAD.id, layerName: "areas"},
         filter }], "Hidden uploads remain selectable with their applied filter");

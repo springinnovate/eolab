@@ -32,7 +32,7 @@ function fixture(overrides = {}, viewOverride = null, visitorOptions = {}) {
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusPage: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const tabContext = { label: "" };
-    const controller = new ModelsController({api, jobs, view, storage, clock, ...visitorOptions, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, storage, clock, ...visitorOptions, getContext: () => ({...context, vectors: context.vectors?.map(value => ({geometryKind: "polygon", ...value}))}),
         onViewLabel: label => { tabContext.label = label; },
         getCatalogItem: source => api.getCatalogItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
@@ -1819,7 +1819,7 @@ for (const recipe of [model, clipModel]) test(`${recipe.title} preserves uploade
     let saved;
     const h = fixture({discoverModels: async () => [recipe], readModelInvocation: async () => saved});
     const uploads = ["75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", "bc3e4f52-1477-44f4-a4d5-a36f74158028"];
-    h.context.vectors = uploads.map((uploadId, index) => ({uploadId, key: `local:upload:${uploadId}`,
+    h.context.vectors = uploads.map((uploadId, index) => ({geometryKind: "polygon", uploadId, key: `local:upload:${uploadId}`,
         label: `Uploaded basins ${index + 1}`, filter: structuredClone(selection.filter), fields: [{name: "BASIN", type: "str"}]}));
     const uploaded = {uploadId: uploads[1], layerName: "basins", filter: structuredClone(selection.filter)};
     h.context.area = {kind: "catalogSelection", catalogSelection: uploaded};

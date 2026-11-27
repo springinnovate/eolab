@@ -1,6 +1,6 @@
 """Raster-clip inputs and result details layered on shared Processing contracts."""
 
-from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection, ModelVectorSelection
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Self
 
@@ -42,7 +42,7 @@ class ClipPolygonGroupMember(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     label: Annotated[str, Field(min_length=1)]
-    selection: VectorSelection
+    selection: ModelVectorSelection
 
 
 class ClipPolygonGroup(BaseModel):
@@ -83,7 +83,7 @@ class ClipInputs(BaseModel):
 
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonGroup: ClipPolygonGroup | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -171,7 +171,7 @@ class ClipArea(BaseModel):
     ]
     bounds: tuple[float, float, float, float] | None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
     polygonGroup: ClipPolygonGroup | None = Field(
         default=None, exclude_if=lambda value: value is None

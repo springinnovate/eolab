@@ -33,7 +33,11 @@ from eolab_app.raster.source_models import (
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 from eolab_app.processing import model_operations
 from eolab_app.processing.operation_context import OperationContext
-from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
+from eolab_app.processing.vector_inputs import (
+    RetainedVectorSelectionReader,
+    write_captured_vector_inputs,
+)
+from eolab_app.source_files import finish_source_task
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -158,7 +162,12 @@ class ProcessingWorker:
 
         if areas is not None:
             areas = RetainedVectorSelectionReader(
-                areas, self.uploads, row["input_uploads"], retained_file, row.get("spatial_filter_drawings")
+                areas,
+                self.uploads,
+                row["input_uploads"],
+                retained_file,
+                row.get("retained_vectors", {}).get("_spatialFilterDrawings"),
+                row.get("captured_vector_files"),
             )
 
         async def report_progress(progress: dict[str, Any]) -> None:
@@ -337,14 +346,20 @@ class ProcessingWorker:
         prepared = await operation.prepare(context, calculation, authorized)
         if model is not None:
             prepared = record_model_preparation(row, model, prepared, self.limits)
-        if drawings := row.get("spatial_filter_drawings"):
-            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings})
+        retained = row.get("retained_vectors", {})
+        if retained:
+            prepared = replace(
+                prepared, specification={**prepared.specification, **retained}
+            )
         saved = await asyncio.to_thread(
             self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
         )
-        if drawings:
-            saved["spec"] = dict(saved["spec"])
-            del saved["spec"]["_spatialFilterDrawings"]
+        if retained:
+            saved["spec"] = {
+                key: value
+                for key, value in saved["spec"].items()
+                if key not in retained
+            }
         row.update(saved)
         return authorized, checksum
 
@@ -380,6 +395,15 @@ class ProcessingWorker:
         calculation = handler.parse_specification(
             model.calculation if model else row["spec"]
         )
+        directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
+        if collections := row.get("retained_vectors", {}).get("_vectorInputs"):
+            writing = asyncio.create_task(
+                asyncio.to_thread(write_captured_vector_inputs, directory, collections)
+            )
+            try:
+                row["captured_vector_files"] = await asyncio.shield(writing)
+            finally:
+                await finish_source_task(writing)
         authorized = None
         checksum = None
         if isinstance(calculation, handler.queued_type):
@@ -402,10 +426,6 @@ class ProcessingWorker:
             await self._resolve_additional_sources(row, spec, handler)
         )
         native_sources, spec = await handler.execution_inputs(context, spec, authorized)
-        directory = await asyncio.to_thread(
-            self.artifacts.prepare,
-            row["attempt_id"],
-        )
         if model is None and handler.cached is not None:
             value = await handler.cached(context, spec, directory)
             if value is not None:
@@ -535,9 +555,13 @@ class ProcessingWorker:
         )
         if row is None:
             return False
-        if "_spatialFilterDrawings" in row["spec"]:
-            spec = dict(row["spec"])
-            row = {**row, "spatial_filter_drawings": spec.pop("_spatialFilterDrawings"), "spec": spec}
+        spec = dict(row["spec"])
+        retained = {
+            key: spec.pop(key)
+            for key in ("_spatialFilterDrawings", "_vectorInputs")
+            if key in spec
+        }
+        row = {**row, "retained_vectors": retained, "spec": spec}
         identifier, attempt = row["id"], row["attempt_id"]
         task = asyncio.create_task(self._execute(row))
         finished = False

@@ -4,11 +4,10 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable
 
-from eolab_app.catalog_selection import CatalogSelectionReader
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.ports import JobStore
+from eolab_app.processing.ports import JobStore, ModelVectorReader
 from eolab_app.raster.models import AuthorizedRaster
 
 
@@ -18,7 +17,7 @@ class OperationContext:
 
     Attributes:
         jobs: Existing result-cache and lifecycle storage interface.
-        areas: Reader for immutable catalog vector selections.
+        areas: Reader for the exact features retained for this calculation.
         limits: Processing concurrency, retention and cache settings.
         aggregate_limits: Summary lifecycle and ground-area accuracy settings.
         native: Supervised native execution lane.
@@ -36,7 +35,7 @@ class OperationContext:
     """
 
     jobs: JobStore
-    areas: CatalogSelectionReader | None
+    areas: ModelVectorReader | None
     limits: RasterClipLimits
     aggregate_limits: RasterAggregateLimits
     native: ReusableProcess | None

@@ -7,6 +7,9 @@ from typing import Any
 
 import fiona
 from fastapi.testclient import TestClient
+import numpy
+import rasterio
+from rasterio.features import geometry_mask
 import psycopg
 import pytest
 
@@ -15,8 +18,19 @@ from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.vector_summary_models import VectorSummaryDetails
 from eolab_app.routes.processing import COOKIE
-from test_model_runs_postgres import model_request, submit
-from test_processing_jobs import HEADERS, store
+from test_model_runs_postgres import (
+    capture_drawing,
+    model_boundary,
+    model_request,
+    submit,
+)
+from catalog_selection_support import register_selection
+from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector_uploads import VectorUploadStore
+from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from test_polygon_summary_areas import rectangle
+from raster_source_support import SOURCE
+from test_processing_jobs import HEADERS, boundary, store
 from test_processing_uploaded_vectors import UploadBoundary, upload_boundary
 from test_vector_uploads import HEADERS as UPLOAD_HEADERS, write_layer
 
@@ -208,6 +222,150 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     assert client.delete(base, headers=HEADERS).status_code == 200
     assert client.get(result["url"]).status_code == 409
     client.portal.call(worker.cleanup)
+
+
+def test_clip_pixels_match_for_all_four_vector_sources(
+    model_boundary: Any, boundary: Any, tmp_path: Path
+) -> None:
+    """Clip the same raster with identical WGS84 features from four independent origins.
+
+    Args:
+        model_boundary: Processing API and native worker with private result storage.
+        boundary: Original raster and catalog admission fixture.
+        tmp_path: Isolated vector dataset and private upload directory.
+    """
+    client, worker, service = model_boundary
+    uploads = VectorUploadStore(tmp_path / "uploads", None)
+    service.uploads = worker.uploads = uploads
+    service.areas = worker.areas = VectorSamplingService(
+        worker.areas.catalog, worker.areas.resolver, uploads=uploads
+    )
+    client.app.include_router(create_vector_uploads_router(uploads))
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [
+            [[0.121, 9.173], [0.433, 9.173], [0.121, 9.427], [0.121, 9.173]]
+        ],
+    }
+    drawing = capture_drawing(client, geometry)
+    original = tmp_path / "sites.gpkg"
+    with fiona.open(
+        original,
+        "w",
+        driver="GPKG",
+        layer="sites",
+        crs="EPSG:4326",
+        schema={"geometry": "Polygon", "properties": {"note": "str", "count": "int"}},
+    ) as dataset:
+        for shape, note in ((geometry, "include"), (rectangle(0, 0, 1, 1), "omit")):
+            dataset.write({"geometry": shape, "properties": {"note": note, "count": 1}})
+    predicate = drawing["filter"]
+    catalog = {**register_selection(boundary[0], original), "filter": predicate}
+    response = client.post(
+        "/api/vector-uploads",
+        params={"name": "Study sites"},
+        headers=UPLOAD_HEADERS,
+        content=original.read_bytes(),
+    )
+    assert response.status_code == 201, response.text
+    upload = {
+        "uploadId": response.json()["id"],
+        "layerName": "sites",
+        "filter": predicate,
+    }
+    # This one-feature group preserves the original polygon in a real model output.
+    parent = submit(
+        client,
+        model_request(
+            client,
+            "vector-summary",
+            inputs={
+                "vector": {
+                    "selection": catalog,
+                    "fields": {"group": "note"},
+                    "rows": [
+                        {
+                            "fields": {"value": "count"},
+                            "parameters": {"statistic": "sum"},
+                        }
+                    ],
+                }
+            },
+            parameters={"boundary_tolerance_m": 0},
+        ),
+    )
+    assert client.portal.call(worker.run_once)
+    parent_url = f"/api/processing/jobs/{parent['jobId']}"
+    ready = client.get(parent_url).json()
+    assert ready["status"] == "ready", ready
+    file = next(
+        file for file in ready["artifacts"]["files"] if file["name"] == "summary"
+    )
+    artifact = {
+        "kind": "runArtifact",
+        "jobId": parent["jobId"],
+        "artifactId": file["artifactId"],
+        "layerName": ready["result"]["layerName"],
+        "filter": predicate,
+    }
+    runs = []
+    for source in (catalog, upload, artifact, drawing):
+        body = model_request(
+            client,
+            "raster-clip",
+            inputs={
+                "raster": SOURCE,
+                "area": {"kind": "catalogSelection", "selection": source},
+            },
+        )
+        runs.append(submit(client, body))
+    with TestClient(client.app, base_url="https://testserver") as stranger:
+        assert (
+            stranger.post(
+                "/api/processing/model-runs", headers=HEADERS, json=body
+            ).status_code
+            == 409
+        )
+    assert (
+        client.delete(
+            "/api/processing/vector-inputs/" + drawing["reference"]["id"],
+            headers=HEADERS,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.delete(
+            f"/api/vector-uploads/{upload['uploadId']}", headers=UPLOAD_HEADERS
+        ).status_code
+        == 204
+    )
+    assert client.delete(parent_url, headers=HEADERS).status_code == 200
+    client.portal.call(worker.cleanup)
+    outputs = []
+    for run in runs:
+        assert client.portal.call(worker.run_once)
+        ready = client.get(f"/api/processing/jobs/{run['jobId']}").json()
+        assert ready["status"] == "ready", ready
+        with (
+            rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            expected_mask = geometry_mask(
+                [geometry],
+                out_shape=raster.shape,
+                transform=raster.transform,
+                all_touched=True,
+                invert=True,
+            )
+            numpy.testing.assert_array_equal(raster.read_masks(1) > 0, expected_mask)
+            assert expected_mask.any() and not expected_mask.all()
+            outputs.append(
+                (raster.transform, raster.crs, raster.read(1), raster.read_masks(1))
+            )
+    for transform, crs, pixels, mask in outputs[1:]:
+        assert (transform, crs) == outputs[0][:2]
+        numpy.testing.assert_array_equal(pixels, outputs[0][2])
+        numpy.testing.assert_array_equal(mask, outputs[0][3])
 
 
 def test_calculated_result_fields_survive_parent_deletion_in_processing(

@@ -4,7 +4,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.aggregate_models import AggregateArea, Alias
 from eolab_app.processing.model_result_contracts import RasterResultGrid
@@ -94,7 +94,7 @@ class RasterCalculatorRequest(RasterCalculatorSchema):
     calculation: RasterFormulaInput
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
 
     @model_validator(mode="after")

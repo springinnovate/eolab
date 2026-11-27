@@ -496,7 +496,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
             client.portal.call(catalog.aclose)
 
 
-@pytest.mark.parametrize("change_source", [None, "private_values"])
+@pytest.mark.parametrize("change_source", [None, "private_values", "drawn_mask"])
 def test_downstream_http_captures_sources_and_publishes_owned_files(
     downstream_boundary: Any, store: PostgresJobStore, change_source: str | None
 ) -> None:
@@ -505,7 +505,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
     Args:
         downstream_boundary: Real API, database, source and native worker composition.
         store: Disposable job store recording published file sizes and expiry.
-        change_source: A private values raster or the original catalog values.
+        change_source: Use a private values raster or the drawn equivalent of the starting mask.
     """
     client, worker, request, items, sources = downstream_boundary
     values = request.values.model_dump(by_alias=True)
@@ -542,13 +542,17 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "jobId": parent["jobId"],
             "artifactId": file["artifactId"],
         }
+    mask = request.starting_mask.model_dump(mode="json", by_alias=True)
+    if change_source == "drawn_mask":
+        mask = {
+            "kind": "catalogSelection",
+            "selection": capture_drawing(client, rectangle(0.1, 0.1, 0.9, 3.9)),
+        }
     body = model_request(
         client,
         "downstream-beneficiaries",
         inputs={
-            "starting_mask": request.starting_mask.model_dump(
-                mode="json", by_alias=True
-            ),
+            "starting_mask": mask,
             "values": values,
         },
         parameters={
@@ -566,11 +570,28 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
     assert pending["invocation"]["model"]["definition"]["steps"][0]["inputs"][
         "hydrology"
     ]["value"] == request.hydrology.model_dump(mode="json", by_alias=True)
-    assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
+    expected_rasters = (
+        {"dem"} if change_source == "drawn_mask" else {"dem", "starting_mask"}
+    )
+    assert set(pending["execution"]["additionalSources"]) == expected_rasters
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{identifier}").json()
     assert ready["status"] == "ready", ready
     assert float(ready["result"]["rows"][0]["value"]) == 24
+    if change_source == "drawn_mask":
+        starting_file = next(
+            file
+            for file in ready["artifacts"]["files"]
+            if file["name"] == "starting_mask"
+        )
+        with (
+            rasterio.MemoryFile(client.get(starting_file["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            numpy.testing.assert_array_equal(
+                raster.read(1) == 1,
+                numpy.tile([True, False, False, False, False, False], (4, 1)),
+            )
     assert {item["name"] for item in ready["artifacts"]["files"]} == {
         "statistics",
         "coverage",
@@ -761,8 +782,53 @@ def test_model_worker_rejects_changed_routing_dependencies(
         model_runs.compute_implementation_checksum.cache_clear()
 
 
+def capture_drawing(client: TestClient, geometry: dict[str, Any]) -> dict[str, Any]:
+    """Capture two named polygons and select the requested geometry by its note.
+
+    Args:
+        client: Browser owning the temporary input and subsequent calculation.
+        geometry: WGS84 polygon that should be used in the calculation.
+
+    Returns:
+        Path-free selection with its attribute predicate.
+    """
+    collection = {
+        "type": "FeatureCollection",
+        "name": "Study sites",
+        "features": [
+            {
+                "type": "Feature",
+                "id": "seed",
+                "properties": {"name": "Chosen", "note": "include"},
+                "geometry": geometry,
+            },
+            {
+                "type": "Feature",
+                "id": "other",
+                "properties": {"name": "Other", "note": "omit"},
+                "geometry": rectangle(0, 0, 1, 1),
+            },
+        ],
+    }
+    response = client.post(
+        "/api/processing/vector-inputs", json=collection, headers=HEADERS
+    )
+    assert response.status_code == 200, response.text
+    return {
+        "kind": "capturedVector",
+        "reference": response.json(),
+        "layerName": "features",
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "note", "operator": "eq", "value": "include"}],
+        },
+    }
+
+
+@pytest.mark.parametrize("source_origin", ["catalog", "drawing"])
 def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
-    model_boundary: Any, boundary: Any
+    model_boundary: Any, boundary: Any, source_origin: str
 ) -> None:
     """Run, publish and download a known mask through ordinary Processing endpoints.
 
@@ -770,6 +836,7 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         model_boundary: Real model HTTP routes, worker and publication service.
         boundary: Catalog raster with elevations increasing east and south, plus
             the vector selection API.
+        source_origin: Supply the same seed polygon from the catalog or the drawing editor.
     """
     vector_client, _, dem_path, _, _ = boundary
     client, worker, service = model_boundary
@@ -785,6 +852,11 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
     )
     selection = register_selection(vector_client, path)
+    if source_origin == "drawing":
+        geometry = rasterio.warp.transform_geom(
+            crs, "EPSG:4326", rectangle(x - radius, y - radius, x + radius, y + radius)
+        )
+        selection = capture_drawing(client, geometry)
     body = model_request(
         client,
         "polygon-flow-area",
@@ -809,6 +881,14 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
     run = submit(client, body)
+    if source_origin == "drawing":
+        assert (
+            client.delete(
+                "/api/processing/vector-inputs/" + selection["reference"]["id"],
+                headers=HEADERS,
+            ).status_code
+            == 200
+        )
     assert client.portal.call(worker.run_once)
     identifier = run["jobId"]
     base = f"/api/processing/jobs/{identifier}"
