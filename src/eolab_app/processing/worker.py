@@ -561,7 +561,8 @@ class ProcessingWorker:
             for key in ("_spatialFilterDrawings", "_vectorInputs")
             if key in spec
         }
-        row = {**row, "retained_vectors": retained, "spec": spec}
+        if retained:
+            row.update(retained_vectors=retained, spec=spec)
         identifier, attempt = row["id"], row["attempt_id"]
         task = asyncio.create_task(self._execute(row))
         finished = False
