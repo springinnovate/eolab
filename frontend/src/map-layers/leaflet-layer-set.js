@@ -1,6 +1,10 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
 import { TileRecovery } from "./tile-recovery.js";
+import { revealLoadedRasterFrame } from "./raster-frame.js";
+
+/** @typedef {import("./raster-frame.js").MapFrame} MapFrame */
+/** @typedef {import("./raster-frame.js").ViewportFrame} ViewportFrame */
 
 const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
 
@@ -10,10 +14,10 @@ export class LeafletLayerSet {
      * Create an empty keyed layer set.
      *
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
-     * @param {{update:(layers:Object[])=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>}|null}
+     * @param {{update:(layers:Object[],options?:{keepPreviousFrame:boolean,views:Map<string,MapFrame>})=>void,clear:()=>void,prepare:(layers:Object[],signal:AbortSignal)=>Promise<void>,drawnView:(key:string)=>MapFrame|undefined}|null}
      * [compositeRenderer=null] Optional ordinary-map composite renderer.
-     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:string[])=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
-     * [tileStatus=null] Optional feedback for independent grids beside local layers.
+     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus,displayed:Map<string,ViewportFrame>)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
+     * [tileStatus=null] Independent grid progress and the frames drawn or outside the viewport.
      */
     constructor(leafletMap, compositeRenderer = null, tileStatus = null) {
         this.leafletMap = leafletMap;
@@ -44,7 +48,7 @@ export class LeafletLayerSet {
             throw new Error(`Leaflet layer already exists: ${key}`);
         }
         layer.setOpacity(opacity);
-        const record = { layer, attached: false, visible, opacity };
+        const record = { layer, attached: false, visible, opacity, frame: null, drawnFrame: null };
         this.layers.set(key, record);
         this.order.push(key);
         if (visible && this.compositeRenderer === null) {
@@ -64,6 +68,7 @@ export class LeafletLayerSet {
     setVisible(key, visible) {
         const record = this.#require(key);
         record.visible = visible;
+        if (!visible) this.#removeDrawnFrame(record);
         if (
             this.compositeRenderer !== null &&
             this.individualRenderingKeys === null
@@ -103,6 +108,7 @@ export class LeafletLayerSet {
         const record = this.#require(key);
         record.opacity = opacity;
         record.layer.setOpacity(opacity);
+        this.#heldFrame(record)?.layer.setOpacity(opacity);
     }
 
     /**
@@ -127,9 +133,10 @@ export class LeafletLayerSet {
         this.order = [...orderedKeys];
         const baseZIndex = 200;
         orderedKeys.forEach((key, index) => {
-            this.#require(key).layer.setZIndex(
-                baseZIndex + orderedKeys.length - index
-            );
+            const record = this.#require(key);
+            const zIndex = baseZIndex + orderedKeys.length - index;
+            record.layer.setZIndex(zIndex);
+            this.#heldFrame(record)?.layer.setZIndex(zIndex);
         });
     }
 
@@ -148,17 +155,38 @@ export class LeafletLayerSet {
      * The controller supplies updated rendering descriptors immediately afterward.
      * @param {string} key Retained map-layer key.
      * @param {Object} layer Replacement Leaflet-compatible layer.
-     * @return {void}
+     * @param {{keepPreviousFrame?:boolean,awaitingPublication?:boolean}} [options] Keep the displayed date during publication and until replacement tiles draw.
+     * @return {boolean} Whether this change can retain a frame in the current map.
      */
-    replace(key, layer) {
-        const { visible, opacity } = this.#require(key);
-        const order = [...this.order];
-        const rendering = this.rendering;
-        this.remove(key);
-        this.add(key, layer, { visible, opacity });
-        this.rendering = rendering;
+    replace(key, layer, {keepPreviousFrame = false, awaitingPublication = false} = {}) {
+        const record = this.#require(key);
+        const retain = Boolean(keepPreviousFrame && record.visible && record.opacity > 0 && record.frame);
+        if (retain && !record.drawnFrame && this.localTileRecovery.get(record.layer)?.recovery.hasLoadedTilesInView) {
+            record.drawnFrame = record.frame;
+        }
+        const drawn = record.drawnFrame ?? this.compositeRenderer?.drawnView?.(key) ?? record.frame;
+        if (retain && awaitingPublication && record.layer === drawn.layer) return true;
+        if (this.pendingIndividualRendering?.keys.has(key)) this.#cancelPendingIndividualRendering();
+        const keepAttached = retain && record.drawnFrame?.layer === record.layer;
+        if (record.attached && !keepAttached) {
+            this.#removeLocalTileRecovery(record.layer);
+            this.leafletMap.removeLayer(record.layer);
+        }
+        if (!retain) this.#removeDrawnFrame(record);
+        if (retain && awaitingPublication) {
+            record.frame = drawn;
+            record.layer = drawn.layer;
+            record.attached = record.drawnFrame?.layer === drawn.layer;
+        } else {
+            record.frame = null;
+            record.layer = layer;
+            layer.setOpacity(record.opacity);
+            record.attached = record.visible && this.compositeRenderer === null;
+            if (record.attached) layer.addTo(this.leafletMap);
+        }
         this.activeIndividualRenderingSignature = null;
-        this.setOrder(order);
+        this.setOrder(this.order);
+        return retain;
     }
 
     /**
@@ -174,12 +202,13 @@ export class LeafletLayerSet {
     /**
      * Synchronize complete top-first descriptors with the current strategy.
      *
-     * @param {Array<{key:string,visible:boolean,opacity:number,descriptor:Object|null}>}
+     * @param {Array<{key:string,visible:boolean,opacity:number,descriptor:Object|null,observation?:{variable:string,time:string,intervalStart?:string}|null}>}
      * rendering Complete retained-layer rendering state.
+     * @param {{keepPreviousFrame?:boolean}} [options] Whether this render follows a same-variable date replacement.
      * @return {void}
      * @throws {Error} If keys do not match the retained layer set.
      */
-    render(rendering) {
+    render(rendering, {keepPreviousFrame = false} = {}) {
         const keys = rendering.map(({ key }) => key);
         if (
             keys.length !== this.layers.size ||
@@ -190,17 +219,19 @@ export class LeafletLayerSet {
                 "Leaflet rendering must contain every retained layer once."
             );
         }
-        this.rendering = rendering.map((candidate) => ({
-            ...candidate,
-            descriptor: structuredClone(candidate.descriptor),
-        }));
-        for (const candidate of this.rendering) {
+        this.rendering = rendering.map(candidate => {
             const record = this.#require(candidate.key);
             record.visible = candidate.visible;
             record.opacity = candidate.opacity;
-        }
+            if (candidate.descriptor !== null) {
+                record.frame = {layer: record.layer, descriptor: structuredClone(candidate.descriptor),
+                    observation: candidate.observation ?? null};
+                if (record.drawnFrame?.layer === record.layer) record.drawnFrame = record.frame;
+            }
+            return {...candidate, descriptor: record.frame?.descriptor ?? null};
+        });
         this.setOrder(keys);
-        this.#applyRenderingStrategy();
+        this.#applyRenderingStrategy(keepPreviousFrame);
     }
 
     /**
@@ -241,7 +272,8 @@ export class LeafletLayerSet {
         if (record === undefined) {
             return null;
         }
-        this.#removeLocalTileRecovery(key);
+        this.#removeDrawnFrame(record);
+        this.#removeLocalTileRecovery(record.layer);
         if (this.pendingIndividualRendering?.keys.has(key)) {
             this.#cancelPendingIndividualRendering();
         }
@@ -276,8 +308,11 @@ export class LeafletLayerSet {
         this.activeIndividualRenderingSignature = null;
     }
 
-    /** Apply either one composite grid or the retained independent grids. */
-    #applyRenderingStrategy() {
+    /** Apply the selected map strategy and carry a date handoff into composite rendering.
+     * @param {boolean} [keepPreviousFrame] Whether this update replaces one temporal observation.
+     * @return {void}
+     */
+    #applyRenderingStrategy(keepPreviousFrame = false) {
         if (this.compositeRenderer === null) return;
         if (this.rendering.some(candidate => candidate.descriptor === null && candidate.visible)) {
             this.#renderWithLocalLayers();
@@ -290,13 +325,15 @@ export class LeafletLayerSet {
         }
         this.#cancelPendingIndividualRendering();
         for (const record of this.layers.values()) {
+            this.#removeDrawnFrame(record);
             if (record.attached) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
                 record.attached = false;
             }
         }
-        this.compositeRenderer.update(this.#compositeLayers());
+        const views = new Map(this.#visibleCompositeEntries().map(({key}) => [key, this.#require(key).frame]));
+        this.compositeRenderer.update(this.#compositeLayers(), {keepPreviousFrame, views});
     }
 
     /** Prepare an ordinary composite with one replacement while preserving its neighbors and their drawing order.
@@ -320,8 +357,15 @@ export class LeafletLayerSet {
      * @return {Object[]} Visible styled descriptors with their current opacity.
      */
     #compositeLayers(key, replacement) {
-        return this.rendering.filter(layer => layer.visible && layer.opacity > 0 && layer.descriptor !== null)
+        return this.#visibleCompositeEntries()
             .map(layer => ({...structuredClone(layer.key === key ? replacement : layer.descriptor), opacity: layer.opacity}));
+    }
+
+    /** Return visible, published entries in the order used to build the server composite.
+     * @return {{key:string,descriptor:Object,opacity:number}[]} Ordered map entries.
+     */
+    #visibleCompositeEntries() {
+        return this.rendering.filter(layer => layer.visible && layer.opacity > 0 && layer.descriptor !== null);
     }
 
     /**
@@ -333,23 +377,26 @@ export class LeafletLayerSet {
     #renderWithLocalLayers() {
         this.#cancelPendingIndividualRendering();
         this.activeIndividualRenderingSignature = null;
-        this.compositeRenderer.clear();
+        if (!this.showingLocalLayers) this.compositeRenderer.clear();
         this.showingLocalLayers = true;
         this.#watchLocalTiles();
         for (const candidate of this.rendering) {
             const record = this.#require(candidate.key);
             const visible = candidate.visible && (candidate.descriptor === null ||
                 this.individualRenderingKeys === null || this.individualRenderingKeys.has(candidate.key));
-            this.#setLayerHidden(record.layer, false);
+            if (!visible) this.#removeDrawnFrame(record);
             if (visible && !record.attached) record.layer.addTo(this.leafletMap);
             if (!visible && record.attached) this.leafletMap.removeLayer(record.layer);
+            this.#setLayerHidden(record.layer, Boolean(this.#heldFrame(record)));
             record.attached = visible;
         }
     }
 
     /** Retry failed visible independent tiles without reloading successful ones. @return {void} */
     retryFailedTiles() {
-        for (const { recovery } of this.localTileRecovery.values()) recovery.retryFailedTiles();
+        for (const [layer, {key, recovery}] of this.localTileRecovery) {
+            if (this.#require(key).layer === layer) recovery.retryFailedTiles();
+        }
         if (!this.showingLocalLayers && this.individualRenderingKeys !== null && this.activeIndividualRenderingSignature === null) {
             this.#prepareIndividualRendering();
         }
@@ -361,38 +408,40 @@ export class LeafletLayerSet {
      * @return {boolean} Whether independent tile recovery owns its errors.
      */
     hasTileRecovery(key) {
-        return this.localTileRecovery.has(key);
+        return this.localTileRecovery.has(this.layers.get(key)?.layer);
     }
 
     /** Observe only visible catalog grids; annotations have no server tiles. @return {void} */
     #watchLocalTiles() {
         if (!this.tileStatus) return;
-        const visible = new Set(this.rendering.filter(candidate => candidate.descriptor !== null &&
-            candidate.visible &&
-            (this.individualRenderingKeys === null || this.individualRenderingKeys.has(candidate.key)))
-            .map(candidate => candidate.key));
-        for (const key of this.localTileRecovery.keys()) {
-            if (!visible.has(key)) this.#removeLocalTileRecovery(key);
-        }
-        for (const key of visible) {
-            if (!this.localTileRecovery.has(key)) {
-                const record = this.#require(key);
-                // A previously staged paired grid must start a fresh observable tile cycle.
+        const watched = new Set();
+        for (const {key, descriptor, visible} of this.rendering) {
+            if (!visible || !descriptor || (this.individualRenderingKeys && !this.individualRenderingKeys.has(key))) continue;
+            const record = this.#require(key), layer = record.layer;
+            watched.add(layer);
+            if (record.drawnFrame) watched.add(record.drawnFrame.layer);
+            if (!this.localTileRecovery.has(layer)) {
+                // A grid arriving from paired mode needs an observable tile cycle.
                 if (record.attached) {
-                    this.leafletMap.removeLayer(record.layer);
+                    this.leafletMap.removeLayer(layer);
                     record.attached = false;
+                    if (record.drawnFrame?.layer === layer) record.drawnFrame = null;
                 }
-                const status = { phase: "loading", total: 0, loaded: 0, failed: 0 };
-                const recovery = new TileRecovery(this.leafletMap, this.#require(key).layer, snapshot => {
-                    const current = this.localTileRecovery.get(key);
-                    if (!current || current.recovery !== recovery) return;
-                    current.status = snapshot;
-                    this.tileStatus.onLayerStatus(key, snapshot);
+                const watch = {key, status: {phase: "loading", total: 0, loaded: 0, failed: 0}};
+                watch.recovery = new TileRecovery(this.leafletMap, layer, status => {
+                    watch.status = status;
+                    if (record.layer === layer) {
+                        if (status.phase === "complete" && (watch.recovery.hasLoadedTilesInView || this.#heldFrame(record))) this.#revealFrame(record);
+                        this.tileStatus.onLayerStatus(key, status);
+                    }
                     this.#reportLocalTileStatus();
                 });
-                this.localTileRecovery.set(key, { recovery, status });
+                this.localTileRecovery.set(layer, watch);
             }
-            this.localTileRecovery.get(key).recovery.refresh();
+            this.localTileRecovery.get(layer).recovery.refresh();
+        }
+        for (const layer of this.localTileRecovery.keys()) {
+            if (!watched.has(layer)) this.#removeLocalTileRecovery(layer);
         }
         this.#reportLocalTileStatus();
     }
@@ -400,7 +449,8 @@ export class LeafletLayerSet {
     /** Combine independent grid counts into the existing on-map status. @return {void} */
     #reportLocalTileStatus() {
         if (!this.showingLocalLayers || !this.tileStatus) return;
-        const statuses = [...this.localTileRecovery.values()].map(record => record.status);
+        const statuses = [...this.localTileRecovery].filter(([layer, watch]) => this.layers.get(watch.key)?.layer === layer)
+            .map(([, watch]) => watch.status);
         const total = statuses.reduce((sum, status) => sum + status.total, 0);
         const loaded = statuses.reduce((sum, status) => sum + status.loaded, 0);
         const failed = statuses.reduce((sum, status) => sum + status.failed, 0);
@@ -408,28 +458,39 @@ export class LeafletLayerSet {
             : statuses.some(status => status.phase === "retrying") ? "retrying"
             : statuses.some(status => status.phase === "loading") ? "loading"
             : failed ? "incomplete" : "complete";
-        const displayed = this.rendering.filter(layer => this.localTileRecovery.get(layer.key)?.status.phase === "complete")
-            .map(layer => layer.descriptor.layerName);
+        const displayed = new Map();
+        for (const {key} of this.rendering) {
+            const record = this.#require(key), frame = record.drawnFrame;
+            if (frame && this.localTileRecovery.get(frame.layer)?.recovery.hasLoadedTilesInView) {
+                displayed.set(key, frame);
+            } else {
+                const status = this.localTileRecovery.get(record.layer)?.status;
+                if (record.frame && status?.phase === "complete" && status.total === 0) {
+                    displayed.set(key, {...record.frame, outsideViewport: true});
+                }
+            }
+        }
         this.tileStatus.onStatus({ phase, total, loaded, failed }, displayed);
     }
 
-    /**
-     * Release one grid's observers and reset its tile warning.
-     * @param {string} key Retained layer key.
+    /** Release tile observations when a grid leaves the map.
+     * @param {Object} layer Source grid being detached.
      * @return {void}
      */
-    #removeLocalTileRecovery(key) {
-        const record = this.localTileRecovery.get(key);
-        if (!record) return;
-        record.recovery.destroy();
-        this.localTileRecovery.delete(key);
-        this.tileStatus.onLayerStatus(key, { phase: "idle", total: 0, loaded: 0, failed: 0 });
+    #removeLocalTileRecovery(layer) {
+        const watch = this.localTileRecovery.get(layer);
+        if (!watch) return;
+        watch.recovery.destroy();
+        this.localTileRecovery.delete(layer);
+        if (this.layers.get(watch.key)?.layer === layer) {
+            this.tileStatus.onLayerStatus(watch.key, {phase: "idle", total: 0, loaded: 0, failed: 0});
+        }
     }
 
     /** Stop independent tile recovery when another presentation takes ownership. @return {void} */
     #clearLocalTileRecovery() {
         this.showingLocalLayers = false;
-        for (const key of this.localTileRecovery.keys()) this.#removeLocalTileRecovery(key);
+        for (const layer of this.localTileRecovery.keys()) this.#removeLocalTileRecovery(layer);
     }
 
     /**
@@ -496,6 +557,7 @@ export class LeafletLayerSet {
         this.#cancelPendingIndividualRendering();
         const selected = new Set(keys);
         for (const [key, record] of this.layers) {
+            if (!selected.has(key)) this.#removeDrawnFrame(record);
             if (!selected.has(key) && record.attached) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
@@ -512,24 +574,23 @@ export class LeafletLayerSet {
             failed: new Set(),
             generation,
             keys: selected,
-            remaining: new Set(keys),
             retryCount: 0,
             signature,
             listeners: [],
         };
         this.pendingIndividualRendering = pending;
-        this.tileStatus?.onStatus({phase: "loading", total: 0, loaded: 0, failed: 0}, []);
+        const holdingFrame = keys.some(key => this.#heldFrame(this.#require(key)));
+        this.tileStatus?.onStatus({phase: "loading", total: 0, loaded: 0, failed: 0},
+            holdingFrame ? this.#drawnIndividualFrames(keys) : new Map());
         for (const key of keys) {
             const record = this.#require(key);
+            const keepVisible = holdingFrame && record.drawnFrame?.layer === record.layer;
             if (!record.attached) {
                 record.layer.addTo(this.leafletMap);
                 record.attached = true;
             }
-            this.#setLayerHidden(record.layer, true);
-            const onLoad = () => this.#recordIndividualLayerLoad(
-                generation,
-                key
-            );
+            this.#setLayerHidden(record.layer, !keepVisible);
+            const onLoad = () => this.#revealReadyIndividualLayers(generation);
             const onError = () => this.#recordIndividualLayerError(
                 generation,
                 key
@@ -544,22 +605,23 @@ export class LeafletLayerSet {
             } else {
                 record.layer.once?.("load", onLoad);
             }
-            if (!record.layer.isLoading()) onLoad();
         }
+        this.#revealReadyIndividualLayers(generation);
     }
 
     /**
-     * Record one selected grid load and reveal the complete current selection.
+     * Reveal the selected grids once all are ready for the current viewport.
+     * A pan can start a new tile cycle on an axis that previously finished.
      *
      * @param {number} generation Rendering transition generation.
-     * @param {string} key Loaded retained key.
      * @return {void}
      */
-    #recordIndividualLayerLoad(generation, key) {
+    #revealReadyIndividualLayers(generation) {
         const pending = this.pendingIndividualRendering;
         if (pending === null || pending.generation !== generation) return;
-        pending.remaining.delete(key);
-        if (pending.remaining.size > 0) return;
+        for (const key of pending.keys) {
+            if (this.#require(key).layer.isLoading()) return;
+        }
         if (pending.failed.size > 0) {
             if (this.#retryFailedIndividualLayers(pending)) return;
             this.#failIndividualRendering(generation);
@@ -571,12 +633,11 @@ export class LeafletLayerSet {
         for (const selectedKey of pending.keys) {
             const record = this.layers.get(selectedKey);
             if (record?.attached) {
-                this.#setLayerHidden(record.layer, false);
+                this.#revealFrame(record);
             }
         }
         this.activeIndividualRenderingSignature = pending.signature;
-        const displayed = this.rendering.filter(layer => pending.keys.has(layer.key) && layer.descriptor)
-            .map(layer => layer.descriptor.layerName);
+        const displayed = this.#drawnIndividualFrames(pending.keys);
         this.tileStatus?.onStatus({phase: "complete", total: 0, loaded: 0, failed: 0}, displayed);
     }
 
@@ -616,7 +677,6 @@ export class LeafletLayerSet {
         }
         const retryKeys = [...pending.failed];
         pending.failed.clear();
-        pending.remaining = new Set(retryKeys);
         pending.retryCount += 1;
         for (const key of retryKeys) {
             this.#require(key).layer.redraw();
@@ -635,9 +695,10 @@ export class LeafletLayerSet {
         if (pending === null || pending.generation !== generation) return;
         this.#removePendingIndividualListeners(pending);
         this.pendingIndividualRendering = null;
+        const holdingFrame = [...pending.keys].some(key => this.#heldFrame(this.#require(key)));
         for (const key of pending.keys) {
             const record = this.layers.get(key);
-            if (record?.attached) {
+            if (record?.attached && (!holdingFrame || this.#heldFrame(record))) {
                 this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
                 record.attached = false;
@@ -645,7 +706,7 @@ export class LeafletLayerSet {
         }
         this.activeIndividualRenderingSignature = null;
         this.tileStatus?.onStatus({phase: "error", total: 0, loaded: 0, failed: 0,
-            message: "The selected map layers could not be drawn."}, []);
+            message: "The selected map layers could not be drawn."}, holdingFrame ? this.#drawnIndividualFrames(pending.keys) : new Map());
     }
 
     /**
@@ -660,7 +721,7 @@ export class LeafletLayerSet {
         for (const key of pending.keys) {
             const record = this.layers.get(key);
             if (record !== undefined) {
-                this.#setLayerHidden(record.layer, false);
+                this.#setLayerHidden(record.layer, Boolean(this.#heldFrame(record)));
             }
         }
         this.pendingIndividualRendering = null;
@@ -681,7 +742,7 @@ export class LeafletLayerSet {
     }
 
     /**
-     * Hide or reveal one attached Leaflet layer container.
+     * Keep a staged grid out of the map's drawing order while Leaflet loads its tiles.
      *
      * @param {Object} layer Leaflet-compatible layer.
      * @param {boolean} hidden Whether the layer must remain visually hidden.
@@ -689,16 +750,61 @@ export class LeafletLayerSet {
      */
     #setLayerHidden(layer, hidden) {
         const container = layer.getContainer?.();
-        if (container?.style !== undefined) {
-            container.style.visibility = hidden ? "hidden" : "";
+        if (container) container.hidden = hidden;
+    }
+
+    /** Return the source frames currently visible in a paired presentation.
+     * @param {Iterable<string>} keys Selected independent grids.
+     * @return {Map<string,MapFrame>} Drawn frame by view key.
+     */
+    #drawnIndividualFrames(keys) {
+        const displayed = new Map();
+        for (const key of keys) {
+            const frame = this.#require(key).drawnFrame;
+            if (frame) displayed.set(key, frame);
         }
+        return displayed;
+    }
+
+    /** Identify an old independent grid kept visible behind its replacement.
+     * @param {Object} record Retained layer record.
+     * @return {MapFrame|null} The attached previous frame, if it differs from the selected source.
+     */
+    #heldFrame(record) {
+        return record.drawnFrame?.layer === record.layer ? null : record.drawnFrame;
+    }
+
+    /** Reveal a ready independent grid and retire the previous observation.
+     * @param {Object} record Retained layer record.
+     * @return {void}
+     */
+    #revealFrame(record) {
+        const previous = this.#heldFrame(record);
+        if (previous) {
+            revealLoadedRasterFrame(record.layer, previous.layer);
+            this.#removeDrawnFrame(record);
+        } else this.#setLayerHidden(record.layer, false);
+        record.drawnFrame = record.frame;
+    }
+
+    /** Release the displayed frame, detaching it if the row also has an incoming grid.
+     * @param {Object} record Retained layer record.
+     * @return {void}
+     */
+    #removeDrawnFrame(record) {
+        const held = this.#heldFrame(record);
+        if (held) {
+            this.#removeLocalTileRecovery(held.layer);
+            this.leafletMap.removeLayer(held.layer);
+        }
+        record.drawnFrame = null;
     }
 
     /**
      * Require one retained record.
      *
      * @param {string} key Stable map-layer key.
-     * @return {{layer:Object,attached:boolean}} Retained record.
+     * @return {{layer:Object,attached:boolean,visible:boolean,opacity:number,frame:MapFrame|null,drawnFrame:MapFrame|null}} Retained record.
      * @throws {RangeError} If the key is unknown.
      */
     #require(key) {

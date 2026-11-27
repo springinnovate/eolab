@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
+import { FakeRasterControlElement } from "../../test-support/raster/fake-controls-document.js";
 
 /** Flush tile-status microtasks. @return {Promise<void>} Settled callbacks. */
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
@@ -28,22 +29,26 @@ function evented() {
  */
 function fixture() {
     const statuses = [], layerStatuses = new Map();
+    let displayed;
     const map = Object.assign(evented(), {
-        zoom: 1, attached: new Set(),
+        zoom: 1, attached: new Set(), pane: new FakeRasterControlElement(),
         getZoom() { return this.zoom; },
+        getZoomScale(to, from) { return 2 ** (to - from); },
         getPixelBounds: () => ({ min: { x: 0, y: 0 }, max: { x: 512, y: 256 } }),
-        removeLayer(layer) { this.attached.delete(layer); },
+        removeLayer(layer) { this.attached.delete(layer); layer.getContainer().remove(); },
     });
     const set = new LeafletLayerSet(map, { clear() {}, update() {} }, {
-        onStatus: status => statuses.push(status),
+        onStatus: (status, frames) => { statuses.push(status); displayed = frames; },
         onLayerStatus: (key, status) => layerStatuses.set(key, status),
     });
     const layers = new Map();
     for (const key of ["a", "annotation", "b"]) {
+        const container = new FakeRasterControlElement();
         const layer = Object.assign(evented(), {
             additions: 0,
             isLoading: () => true,
-            addTo() { this.additions++; map.attached.add(this); },
+            getContainer: () => container,
+            addTo() { this.additions++; map.attached.add(this); map.pane.appendChild(this.getContainer()); },
             setOpacity() {}, setZIndex() {},
             getTileSize: () => ({ x: 256, y: 256 }),
         });
@@ -53,7 +58,7 @@ function fixture() {
     const rendering = [...layers.keys()].map(key => ({ key, visible: true, opacity: 1,
         descriptor: key === "annotation" ? null : { layerName: key } }));
     set.render(rendering);
-    return { set, map, layers, rendering, layerStatuses, status: () => statuses.at(-1),
+    return { set, map, layers, rendering, layerStatuses, status: () => statuses.at(-1), displayed: () => displayed,
         tile(key, x = 0) {
             const assignments = [], source = `/tiles/${key}/${x}`;
             const tile = { assignments, get src() { return source; }, set src(value) { assignments.push(value); } };
@@ -80,10 +85,40 @@ test("annotation interleaving tracks both catalog grids and recovers a failed im
     f.set.clear();
 });
 
+test("an annotation map keeps already drawn tiles when a pan and a date change overlap", async () => {
+    const f = fixture(), old = f.layers.get("a");
+    old.emit("tileload", {tile: f.tile("a")}); await flush();
+    f.tile("a", 1); await flush();
+    const container = new FakeRasterControlElement();
+    const incoming = {...old, ...evented(), getContainer: () => container};
+    f.layers.set("a", incoming);
+    f.set.replace("a", incoming, {keepPreviousFrame: true});
+    f.set.render(f.rendering.map(row => row.key === "a" ? {...row, descriptor: {layerName: "next"}} : row));
+    const pending = f.tile("a");
+    await flush();
+    assert.ok(f.map.attached.has(old), "the loaded overlap stays visible while the new date loads");
+    f.map.zoom = 0; f.tile("a"); f.map.emit("zoomend"); await flush();
+    assert.equal(f.displayed().get("a")?.layer, old, "the retained child tile still shows the previous date after zooming out");
+    f.map.zoom = 1; f.map.emit("zoomend");
+    incoming.emit("tileload", {tile: pending}); await flush();
+    assert.equal(f.map.attached.has(old), false);
+    assert.ok(f.map.attached.has(incoming));
+    assert.equal(f.map.pane.children[0], container,
+        "the incoming raster replaces its old position beside the annotation");
+    f.set.clear();
+});
+
 test("a view outside catalog layer bounds has no missing tiles or endless loading", async () => {
     const f = fixture();
+    const observation = {variable: "wind", time: "2026-07-01T12:00:00Z"};
+    f.set.render(f.rendering.map(row => row.key === "a" ? {...row, observation} : row));
     await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 0, loaded: 0, failed: 0 });
+    assert.equal(f.displayed().get("a")?.outsideViewport, true, "the selected raster is outside the viewport");
+    f.layers.get("b").emit("tileload", {tile: f.tile("b")}); await flush();
+    assert.equal(f.status().loaded, 1);
+    assert.deepEqual(f.displayed().get("a").observation, observation);
+    assert.equal(f.displayed().get("a").outsideViewport, true, "another raster's visible tile does not change this row's status");
     f.set.clear();
 });
 

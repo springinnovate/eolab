@@ -1205,12 +1205,15 @@ export class MapLayerController {
      * Rebuild a retained layer after its owner changes the source or publication.
      * Keep its row, appearance, visibility and drawing position.
      * @param {string} key Retained map-layer key.
+     * @param {{keepPreviousFrame?:boolean}} [options] Keep the drawn observation during a date change in the same variable.
      * @return {void}
      */
-    replaceLayer(key) {
+    replaceLayer(key, {keepPreviousFrame = false} = {}) {
         const record = this.#requireRecord(key);
-        this.leafletLayers.replace(key, this.#createLayer(record));
-        this.render();
+        const retainFrame = this.leafletLayers.replace(key, this.#createLayer(record), {
+            keepPreviousFrame, awaitingPublication: record.publication === null,
+        });
+        this.render(null, null, retainFrame);
     }
 
     /**
@@ -1260,20 +1263,23 @@ export class MapLayerController {
      * @param {{key:string,action:string}|null} [requestedFocus=null] Focus hint.
      * @param {string|null} [opacityKey=null] Retained key when only its opacity changed;
      * preserves row controls while still updating the complete rendering plan.
+     * @param {boolean} [keepPreviousFrame=false] Keep the displayed frame during a same-variable date change.
      * @return {void}
      */
-    render(requestedFocus = null, opacityKey = null) {
+    render(requestedFocus = null, opacityKey = null, keepPreviousFrame = false) {
         const layers = this.snapshots();
         this.leafletLayers.render(
-            this.stack.entries.map((entry) => {
+            layers.map(entry => {
                 const record = this.#requireRecord(entry.key);
                 return {
                     key: entry.key,
                     visible: entry.visible && record.adapter.renderingAvailable?.(record) !== false,
                     opacity: entry.opacity,
                     descriptor: record.publication === null ? null : record.adapter.renderDescriptor(record),
+                    observation: entry.timeline ? {variable: entry.timeline.variable, time: entry.timeline.time,
+                        intervalStart: entry.timeline.intervalStart} : null,
                 };
-            })
+            }), {keepPreviousFrame}
         );
         this.view.render(layers, this.presentationActiveKey, requestedFocus, opacityKey);
         this.onLayersChange(layers, opacityKey === null ? null : { kind: "opacity", key: opacityKey });

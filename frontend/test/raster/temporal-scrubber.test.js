@@ -25,13 +25,24 @@ test("annual totals show their covered years and navigate using exact interval-e
         const time = "2025-01-01T00:00:00.000Z";
         widget.setLayers([{...layer, timeline: {...layer.timeline, period: "calendar_year",
             months: ["2024-12", "2026-12"], month: "2024-12", times: [time], time}}]);
-        widget.setMapStatus({phase: "complete"}, ["first"]);
+        widget.setMapStatus({phase: "complete"}, new Map([[layer.key, {variable: layer.timeline.variable, time}]]));
         assert.equal(controls.display.textContent, "On map · 2024");
         assert.equal(controls.time.getAttribute("aria-valuetext"), "2024");
         assert.deepEqual(Array.from(controls.month.options, option => option.textContent), ["2024", "2026"]);
         controls.forward.dispatchEvent(new Event("click"));
         assert.deepEqual(calls.at(-1), ["rain", "2026-12", "first"]);
     } finally { widget.destroy(); }
+});
+
+test("the drawn interval keeps its start date while the next month loads", t => {
+    const {controls, widget, layer} = fixture();
+    t.after(() => widget.destroy());
+    const intervalStart = "2020-01-02T12:00:00.000Z", time = "2020-02-01T00:00:00.000Z";
+    const timeline = {...layer.timeline, period: "explicit", time, times: [time], intervalStarts: {[time]: intervalStart}};
+    widget.setLayers([{...layer, timeline}]);
+    widget.setMapStatus({phase: "complete"}, new Map([[layer.key, {variable: timeline.variable, time, intervalStart}]]));
+    widget.setLayers([{...layer, timeline: {...timeline, month: "2020-05", times: [], intervalStarts: undefined, loading: true}}]);
+    assert.equal(controls.display.textContent, "On map · 2020-01-02 12:00:00 to 2020-02-01 00:00:00 UTC (end excluded)");
 });
 
 /** Mount the actual timeline control names around a representative irregular, partial month.
@@ -72,7 +83,7 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
     const {widget, root, controls, layer, calls} = fixture();
     try {
         assert.equal(controls.display.textContent, "");
-        widget.setMapStatus({phase: "complete"}, ["first"]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
         assert.equal(controls.status.hidden, false, "the loading status keeps its place between frames");
         assert.equal(controls.status.textContent, "");
         assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC");
@@ -87,9 +98,18 @@ test("the slider snaps across real gaps, commits the final drag and follows laye
         context.mock.timers.tick(100);
         assert.deepEqual(calls, [["rain", stamps[2]]]);
         const changed = {...layer, timeline: {...layer.timeline, time: stamps[2], layerName: "third"}};
+        widget.setMapStatus({phase: "loading"}, new Map([["rain", {variable: "rain", time: stamps[0]}], ["reference", {variable: "rain", time: stamps[2]}]]));
         widget.setLayers([changed]);
+        assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC", "identify the frame still visible");
+        widget.setLayers([changed, {...changed, key: "reference"}]);
+        for (const key of ["reference", "rain"]) {
+            controls.layer.value = key;
+            controls.layer.dispatchEvent(new Event("change"));
+        }
+        assert.equal(controls.display.textContent, "On map · 2000-01-02 01:00 UTC", "returning to a pending view restores its drawn time");
+        widget.setMapStatus({phase: "loading"}, new Map());
         assert.equal(controls.display.textContent, "", "old tiles cannot confirm a different date");
-        widget.setMapStatus({phase: "complete"}, ["third"]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[2]}]]));
         assert.match(controls.display.textContent, /01-05 01:00/);
         assert.match(controls.gap.textContent, /2000-05/);
         controls.forward.dispatchEvent(new Event("click"));
@@ -145,28 +165,40 @@ test("timeline arrows step from a missing saved month to the nearest populated m
     } finally { widget.destroy(); }
 });
 
-test("Play waits for actual tile completion, buffers at most two and cancels prepared work on Pause", async context => {
+test("Play prefetches five frames, advances in order after drawing, and releases the buffer on Pause", async context => {
     context.mock.timers.enable({apis: ["setTimeout"]});
+    const times = [...stamps, ...[7, 9, 12, 15, 17].map(day => `2000-01-${String(day).padStart(2, "0")}T01:00:00.000Z`)];
     const prepared = [], shown = [];
     const {widget, controls, layer} = fixture({prepare: async (_key, time, signal) => {
-        prepared.push({time, signal});
+        await new Promise(finish => prepared.push({time, signal, finish}));
         return () => {
             shown.push(time);
-            widget.setLayers([{...layer, timeline: {...layer.timeline, time, layerName: time}}]);
+            widget.setLayers([{...layer, timeline: {...layer.timeline, times, time, layerName: time}}]);
         };
     }});
     try {
-        widget.setMapStatus({phase: "complete"}, ["first"]);
+        widget.setLayers([{...layer, timeline: {...layer.timeline, times}}]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
+        widget.setMapStatus({phase: "loading"}, new Map([["rain", {variable: "rain", time: stamps[0], outsideViewport: true}]]));
+        assert.equal(controls.status.textContent, "", "an empty viewport has no pending raster");
+        assert.equal(controls.display.textContent, "");
+        assert.equal(controls.play.disabled, false, "a user can play through an observation outside the viewport");
+        assert.deepEqual(prepared, [], "idle browsing does not prefetch");
         controls.play.dispatchEvent(new Event("click"));
-        assert.deepEqual(prepared.map(frame => frame.time), stamps.slice(1));
+        assert.deepEqual(prepared.map(frame => frame.time), times.slice(1, 6));
+        prepared[1].finish();
         context.mock.timers.tick(167);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(shown, [], "a faster second date cannot overtake the first");
+        prepared[0].finish();
         await new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(shown, [stamps[1]]);
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]], "publication alone cannot advance playback");
         assert.equal(controls.status.textContent, "Loading raster…");
-        widget.setMapStatus({phase: "complete"}, [stamps[1]]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[1]}]]));
         assert.equal(controls.status.textContent, "");
+        assert.deepEqual(prepared.map(frame => frame.time), times.slice(1, 7), "drawing one frame opens one slot");
         controls.play.dispatchEvent(new Event("click"));
         context.mock.timers.tick(1000);
         assert.deepEqual(shown, [stamps[1]]);
@@ -175,11 +207,86 @@ test("Play waits for actual tile completion, buffers at most two and cancels pre
     } finally { widget.destroy(); }
 });
 
+test("daily playback prefetches real days across a gap in coverage and stops at the last observation", async context => {
+    context.mock.timers.enable({apis: ["setTimeout"]});
+    const may = ["2000-05-03T06:00:00Z", "2000-05-03T12:00:00Z", "2000-05-14T08:00:00Z"];
+    const prepared = [], shown = [];
+    const {widget, controls, layer} = fixture({prepare: async (_key, destination) => {
+        prepared.push(destination);
+        return () => {
+            const time = destination.month ? may[0] : destination;
+            const month = time.slice(0, 7);
+            shown.push(time);
+            widget.setLayers([{...layer, timeline: {...layer.timeline, time, month, times: month === months[0] ? stamps : may}}]);
+            widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time}]]));
+        };
+    }});
+    try {
+        controls.stride.value = "day";
+        controls.stride.dispatchEvent(new Event("change"));
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
+        controls.play.dispatchEvent(new Event("click"));
+        assert.deepEqual(prepared, [stamps[2], {month: months[1]}]);
+        for (const time of [stamps[2], may[0], may[2]]) {
+            context.mock.timers.tick(167);
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(shown.at(-1), time);
+        }
+        assert.equal(controls.play.disabled, true);
+        assert.equal(controls.play.textContent, "Play");
+        assert.deepEqual(prepared, [stamps[2], {month: months[1]}, may[2]]);
+    } finally { widget.destroy(); }
+});
+
+test("Pause cancels a pending month change and a failed month can be played again", async context => {
+    context.mock.timers.enable({apis: ["setTimeout"]});
+    const requests = [], shown = [];
+    const {widget, controls, layer, calls} = fixture({prepare: (_key, destination, signal) =>
+        new Promise((resolve, reject) => requests.push({destination, signal, resolve, reject}))});
+    const time = stamps.at(-1);
+    widget.setLayers([{...layer, timeline: {...layer.timeline, time}}]);
+    widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time}]]));
+    try {
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        assert.equal(requests.length, 1, "crossing the month uses cancellable frame preparation");
+        assert.deepEqual(requests[0].destination, {month: months[1]});
+        controls.play.dispatchEvent(new Event("click"));
+        assert.equal(requests[0].signal.aborted, true);
+        requests[0].resolve(() => shown.push("obsolete"));
+        await new Promise(resolve => setImmediate(resolve));
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        requests[1].reject(new Error("temporarily unavailable"));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(controls.play.textContent, "Play");
+        assert.equal(controls.play.disabled, false);
+        assert.match(controls.status.textContent, /retry/i);
+        controls.play.dispatchEvent(new Event("click"));
+        context.mock.timers.tick(167);
+        requests[2].resolve(() => shown.push("May"));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(shown, ["May"]);
+        assert.deepEqual(calls, []);
+        context.mock.timers.tick(167);
+        const manual = {...layer.timeline, month: months[1], times: [], loading: true};
+        widget.setLayers([{...layer, timeline: manual}]);
+        assert.equal(requests[3].signal.aborted, true, "choosing the same month in Map contents cancels playback");
+        const finalTime = "2000-05-01T00:00:01Z";
+        widget.setLayers([{...layer, timeline: {...manual, times: [finalTime], time: finalTime, loading: false}}]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: finalTime}]]));
+        requests[3].resolve(null);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(controls.status.textContent, "");
+        assert.match(controls.display.textContent, /05-01 00:00:01 UTC/);
+    } finally { widget.destroy(); }
+});
+
 test("a held drag previews before release and coalesces motion while the first map is drawing", context => {
     context.mock.timers.enable({apis: ["setTimeout"]});
     const {widget, controls, layer, calls} = fixture();
     try {
-        widget.setMapStatus({phase: "complete"}, ["first"]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[0]}]]));
         controls.time.valueAsNumber = Date.parse(stamps[1]);
         controls.time.dispatchEvent(new Event("input"));
         context.mock.timers.tick(40);
@@ -192,7 +299,7 @@ test("a held drag previews before release and coalesces motion while the first m
         controls.time.dispatchEvent(new Event("input"));
         context.mock.timers.tick(500);
         assert.equal(calls.length, 1, "one intermediate frame at a time");
-        widget.setMapStatus({phase: "complete"}, ["third"]);
+        widget.setMapStatus({phase: "complete"}, new Map([["rain", {variable: "rain", time: stamps[2]}]]));
         context.mock.timers.tick(70);
         assert.deepEqual(calls.at(-1), ["rain", stamps[1]]);
         controls.time.valueAsNumber = Date.parse(stamps[0]);
