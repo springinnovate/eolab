@@ -1118,7 +1118,10 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def claim_next_job(
-        self, *, supported_operations: list[str] | None = None
+        self,
+        *,
+        supported_operations: list[str] | None = None,
+        attempt_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Claim the next eligible session's job when a shared worker slot is available.
 
@@ -1133,6 +1136,8 @@ class PostgresJobStore:
         Args:
             supported_operations: Operation IDs the worker can execute. An empty list
                 claims nothing. None selects across all operations.
+            attempt_id: Fresh token supplied by the worker for lost-reply recovery.
+                When omitted, the scheduler assigns the token.
 
         Returns:
             Claimed job with a new attempt token, or None when no slot or eligible
@@ -1148,7 +1153,53 @@ class PostgresJobStore:
                 worker_count=self.limits.worker_count,
                 lease_seconds=self.limits.lease_seconds,
                 supported_operations=supported_operations,
+                attempt_id=attempt_id,
             )
+
+    def recover_unstarted_claim(self, attempt_id: str) -> dict[str, Any] | None:
+        """Recover a claim whose reply was lost before this lane launched native work.
+
+        Take the queue lock before looking up the token so the original claim's
+        commit or rollback is visible. Only this lane can certify that its native
+        work never started and safely finish its cancelled or expired attempt.
+
+        Args:
+            attempt_id: Fresh token the worker supplied for the unanswered claim.
+
+        Returns:
+            The job to execute after renewing its lease, or None when this attempt
+            has no work left to run.
+
+        Raises:
+            ProcessingError: If the database cannot confirm the claim outcome.
+        """
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT * FROM processing.jobs WHERE attempt_id=%s "
+                "AND status IN ('running','cancelling')",
+                (attempt_id,),
+            )
+            job = cursor.fetchone()
+            if job is None:
+                return None
+            if renew_job_lease(
+                cursor,
+                job_id=job["id"],
+                attempt_id=attempt_id,
+                lease_seconds=self.limits.lease_seconds,
+                progress={},
+            ):
+                return job
+            acknowledge_stopped_attempt(
+                cursor,
+                job_id=job["id"],
+                attempt_id=attempt_id,
+                error={
+                    "code": "interrupted",
+                    "detail": "The job was cancelled or its worker lease ended before execution.",
+                },
+            )
+            return None
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]
