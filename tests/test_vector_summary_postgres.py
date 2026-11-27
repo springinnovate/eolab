@@ -224,6 +224,28 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     client.portal.call(worker.cleanup)
 
 
+def test_accepted_drawings_release_staging_capacity(model_boundary: Any) -> None:
+    """Submit more drawings than the staging quota while earlier runs still own their inputs.
+
+    Args:
+        model_boundary: Processing API with a real database and catalog raster.
+    """
+    client, _, _ = model_boundary
+    for _ in range(33):
+        selection = capture_drawing(client, rectangle(0.1, 9.1, 0.3, 9.3))
+        submit(
+            client,
+            model_request(
+                client,
+                "raster-clip",
+                inputs={
+                    "raster": SOURCE,
+                    "area": {"kind": "catalogSelection", "selection": selection},
+                },
+            ),
+        )
+
+
 def test_clip_pixels_match_for_all_four_vector_sources(
     model_boundary: Any, boundary: Any, tmp_path: Path
 ) -> None:
@@ -366,6 +388,32 @@ def test_clip_pixels_match_for_all_four_vector_sources(
         assert (transform, crs) == outputs[0][:2]
         numpy.testing.assert_array_equal(pixels, outputs[0][2])
         numpy.testing.assert_array_equal(mask, outputs[0][3])
+
+    original_url = f"/api/processing/jobs/{runs[-1]['jobId']}"
+    original = client.get(original_url + "/invocation").json()
+    duplicate = submit(
+        client, model_request(client, "raster-clip", inputs=original["inputs"])
+    )
+    assert client.delete(original_url, headers=HEADERS).status_code == 200
+    client.portal.call(worker.cleanup)
+    assert client.portal.call(worker.run_once)
+    duplicate_url = f"/api/processing/jobs/{duplicate['jobId']}"
+    result = client.get(duplicate_url).json()
+    assert result["status"] == "ready", result
+    with (
+        rasterio.MemoryFile(client.get(result["result"]["url"]).content) as memory,
+        memory.open() as raster,
+    ):
+        numpy.testing.assert_array_equal(raster.read(1), outputs[-1][2])
+        numpy.testing.assert_array_equal(raster.read_masks(1), outputs[-1][3])
+    assert client.delete(duplicate_url, headers=HEADERS).status_code == 200
+    unavailable = client.post(
+        "/api/processing/model-runs",
+        headers=HEADERS,
+        json=model_request(client, "raster-clip", inputs=original["inputs"]),
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["detail"]["code"] == "input_unavailable"
 
 
 def test_calculated_result_fields_survive_parent_deletion_in_processing(

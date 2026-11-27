@@ -32,7 +32,7 @@ def write_captured_vector_inputs(
 
     Args:
         directory: Private attempt directory, cleaned after cancellation or publication.
-        collections: Authorized GeoJSON sources keyed by their full retained reference.
+        collections: Authorized GeoJSON sources keyed by the original input ID.
 
     Returns:
         Original reference keys mapped to files available for the duration of this attempt.
@@ -41,6 +41,7 @@ def write_captured_vector_inputs(
         OSError: If the attempt cannot write its scratch dataset.
         fiona.errors.FionaError: If the native writer fails.
     """
+
     paths = {}
     for index, (key, collection) in enumerate(collections.items()):
         path = directory / f"input-vector-{index}.gpkg"
@@ -198,7 +199,7 @@ class RetainedVectorSelectionReader:
             SelectionUnavailableError: If job retention cannot supply the file.
         """
         if isinstance(selection, CapturedVectorSelection):
-            path = self.captured_files[selection.reference.model_dump_json()]
+            path = self.captured_files[selection.reference.id]
             return await asyncio.to_thread(
                 resolve_vector_file_selection, path, selection
             )

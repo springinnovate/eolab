@@ -27,6 +27,7 @@ from eolab_app.processing.models import (
     ProcessingError,
     ProcessingLimits,
     JobInputFile,
+    JobInputReference,
 )
 from eolab_jobs.worker_claim import claim_next_job, lock_job_queue, renew_job_lease
 
@@ -147,9 +148,10 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Install or verify the queue schema and upgrade a supported version 22 queue.
+        """Install or verify the queue schema and upgrade supported version 22 and 23 queues.
 
         Version 23 records which owners were served when each job started.
+        Version 24 keeps immutable private inputs available for retained runs.
         Existing version 22 layouts are checked before upgrading because
         different historical Habitat layouts used the same version marker.
         An up-to-date database is checked without changing its contents.
@@ -164,6 +166,7 @@ class PostgresJobStore:
             if cursor.fetchone()["namespace"] is None:
                 cursor.execute(resources.joinpath("schema.sql").read_text())
                 cursor.execute(resources.joinpath("schema_23.sql").read_text())
+                cursor.execute(resources.joinpath("schema_24.sql").read_text())
                 return
             try:
                 cursor.execute(
@@ -187,10 +190,13 @@ class PostgresJobStore:
                 )
             if versions in ([22], list(range(1, 23))):
                 cursor.execute(resources.joinpath("schema_23.sql").read_text())
-            elif versions not in ([22, 23], list(range(1, 24))):
+                versions.append(23)
+            if versions in ([22, 23], list(range(1, 24))):
+                cursor.execute(resources.joinpath("schema_24.sql").read_text())
+            elif versions not in ([22, 23, 24], list(range(1, 25))):
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema has an unsupported version history. "
-                    "This worker requires a supported version 22 or 23 layout."
+                    "This worker requires a supported version 22, 23 or 24 layout."
                 )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:
@@ -225,13 +231,21 @@ class PostgresJobStore:
             )
             return cursor.rowcount
 
-    def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
-        """Retain a bounded private input for one day or until its owner releases it.
+    def save_input(
+        self,
+        owner: str,
+        checksum: str,
+        payload: dict[str, Any],
+        *,
+        media_type: str = "application/json",
+    ) -> str:
+        """Stage a private input for one day. A job can take ownership at admission.
 
         Args:
             owner: Current Processing browser-session hash.
             checksum: Operation-owned content identity.
             payload: Validated JSON input without filesystem paths or credentials.
+            media_type: Format established by its producer for checked admission.
 
         Returns:
             Opaque identifier usable only by the same owner.
@@ -247,9 +261,9 @@ class PostgresJobStore:
                 413,
             )
         with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute("DELETE FROM processing.inputs WHERE expires_at <= now()")
+            cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute(
-                "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s) AS owned, coalesce(sum(bytes),0) AS bytes FROM processing.inputs",
+                "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s) AS owned, coalesce(sum(bytes),0) AS bytes FROM processing.inputs WHERE expires_at>now()",
                 (owner,),
             )
             count = cursor.fetchone()
@@ -265,8 +279,8 @@ class PostgresJobStore:
                 )
             identifier = uuid4().hex
             cursor.execute(
-                "INSERT INTO processing.inputs VALUES (%s,%s,%s,%s,%s,now()+interval '1 day')",
-                (identifier, owner, checksum, Jsonb(payload), size),
+                "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) VALUES (%s,%s,%s,%s,%s,now()+interval '1 day',%s)",
+                (identifier, owner, checksum, Jsonb(payload), size, media_type),
             )
             return identifier
 
@@ -312,8 +326,38 @@ class PostgresJobStore:
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
-                "DELETE FROM processing.inputs WHERE id=%s AND owner=%s",
+                "DELETE FROM processing.inputs WHERE id=%s AND owner=%s AND expires_at IS NOT NULL",
                 (identifier, owner),
+            )
+
+    @staticmethod
+    def _authorize_input_reference(
+        cursor: psycopg.Cursor[dict[str, Any]], owner: str, reference: JobInputReference
+    ) -> None:
+        """Check a staged input or the exact input of a run still visible to this owner.
+
+        Args:
+            cursor: Locked job admission transaction.
+            owner: Requesting Processing session.
+            reference: Original input ID, checksum and required format.
+
+        Raises:
+            ProcessingError: If the reference is expired, unowned or the wrong format.
+        """
+        cursor.execute(
+            "SELECT FROM processing.inputs i WHERE i.id=%s AND i.owner=%s AND i.sha256=%s "
+            "AND i.media_type=%s AND (i.expires_at>now() OR EXISTS ("
+            "SELECT FROM processing.job_inputs r JOIN processing.subscribed_jobs j ON j.job_id=r.job_id "
+            "WHERE r.input_id=i.id AND j.owner=i.owner AND j.status<>'deleted' AND "
+            "(j.status IN ('queued','running','cancelling') OR j.retained_metadata IS NOT NULL "
+            "OR (j.status='ready' AND j.expires_at>now()))))",
+            (reference.id, owner, reference.sha256, reference.media_type),
+        )
+        if cursor.fetchone() is None:
+            raise ProcessingError(
+                "input_unavailable",
+                "This vector input is unavailable. Select the layer again.",
+                409,
             )
 
     def find_request(self, owner: str, request_key: str) -> dict[str, Any] | None:
@@ -536,6 +580,7 @@ class PostgresJobStore:
         new_jobs: list[tuple[Any, ...]] = []
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
+        private_inputs: list[tuple[str, str]] = []
         with self._transaction(acquire_lock=True) as cursor:
             with (cursor.connection.cursor() as work_cursor,):
                 with cursor.connection.pipeline():
@@ -575,6 +620,8 @@ class PostgresJobStore:
                     continue
                 # Existing retries above retain their original grant even after expiry.
                 try:
+                    for reference in expected.input_references:
+                        self._authorize_input_reference(cursor, owner, reference)
                     inputs = []
                     for captured in expected.input_files:
                         parent, current = self._inspect_input_file(
@@ -604,6 +651,10 @@ class PostgresJobStore:
                 identifier = uuid4().hex
                 job_id = shared["id"] if shared else identifier
                 if not shared:
+                    private_inputs.extend(
+                        (job_id, reference.id)
+                        for reference in expected.input_references
+                    )
                     retained_seconds = (
                         max(
                             expected.minimum_retention_seconds,
@@ -683,6 +734,15 @@ class PostgresJobStore:
                     cursor.executemany(
                         "INSERT INTO processing.input_files(job_id,parent_id,run_id,artifact_id,sha256,bytes) VALUES (%s,%s,%s,%s,%s,%s)",
                         new_inputs,
+                    )
+                if private_inputs:
+                    cursor.executemany(
+                        "INSERT INTO processing.job_inputs(job_id,input_id) VALUES (%s,%s)",
+                        private_inputs,
+                    )
+                    cursor.execute(
+                        "UPDATE processing.inputs SET expires_at=NULL WHERE id=ANY(%s) AND expires_at IS NOT NULL",
+                        ([input_id for _, input_id in private_inputs],),
                     )
                 if new_jobs:
                     cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
@@ -1138,12 +1198,48 @@ class PostgresJobStore:
         """
 
         with self._transaction() as cursor:
-            return claim_next_job(
+            row = claim_next_job(
                 cursor,
                 worker_count=self.limits.worker_count,
                 lease_seconds=self.limits.lease_seconds,
                 supported_operations=supported_operations,
             )
+            if row is not None:
+                cursor.execute(
+                    "SELECT FROM processing.job_inputs WHERE job_id=%s LIMIT 1",
+                    (row["id"],),
+                )
+                row["has_input_payloads"] = cursor.fetchone() is not None
+            return row
+
+    def read_job_inputs(
+        self, identifier: str, attempt: str
+    ) -> dict[str, dict[str, Any]]:
+        """Load this worker's private input documents without holding the queue lock.
+
+        Args:
+            identifier: Claimed computation ID, independent of its public subscribers.
+            attempt: Current worker attempt's fencing token.
+
+        Returns:
+            Immutable JSON payloads keyed by original input ID.
+
+        Raises:
+            ProcessingError: If this attempt no longer owns the retained inputs.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT i.id,i.payload FROM processing.jobs j "
+                "JOIN processing.job_inputs r ON r.job_id=j.id JOIN processing.inputs i ON i.id=r.input_id "
+                "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running'",
+                (identifier, attempt),
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            raise ProcessingError(
+                "job_cancelled", "Calculation stopped before reading its inputs.", 409
+            )
+        return {row["id"]: row["payload"] for row in rows}
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]
@@ -1449,7 +1545,6 @@ class PostgresJobStore:
             ProcessingError: If the database cannot update expiration or read jobs.
         """
         with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             self._delete_old_job_records(cursor)
             self._finalize_deleted_jobs(cursor)
@@ -1459,6 +1554,15 @@ class PostgresJobStore:
             )
             cursor.execute(
                 "UPDATE processing.jobs SET status='expired',updated_at=now() WHERE status='ready' AND expires_at<=now()"
+            )
+            cursor.execute(
+                "DELETE FROM processing.job_inputs r USING processing.jobs j WHERE j.id=r.job_id "
+                "AND (j.status='deleted' OR (j.status NOT IN ('queued','running','cancelling','ready') "
+                "AND j.retained_metadata IS NULL))"
+            )
+            cursor.execute(
+                "DELETE FROM processing.inputs i WHERE (i.expires_at<=now() OR i.expires_at IS NULL) "
+                "AND NOT EXISTS (SELECT FROM processing.job_inputs r WHERE r.input_id=i.id)"
             )
             cursor.execute(
                 "SELECT j.* FROM processing.jobs j WHERE j.status NOT IN ('queued','running','cancelling','ready') AND (j.reserved_bytes>0 OR j.spec IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM processing.transfers t WHERE t.job_id=j.id) AND NOT EXISTS (SELECT 1 FROM processing.input_files i WHERE i.parent_id=j.id) ORDER BY j.updated_at LIMIT 100"

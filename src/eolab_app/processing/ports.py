@@ -130,13 +130,21 @@ class JobStore(Protocol):
         """
         ...
 
-    def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
+    def save_input(
+        self,
+        owner: str,
+        checksum: str,
+        payload: dict[str, Any],
+        *,
+        media_type: str = "application/json",
+    ) -> str:
         """Store an owner-private JSON input and return its expiring opaque ID.
 
         Args:
             owner: Browser-session hash.
             checksum: Operation-owned content identity.
             payload: Validated JSON to retain.
+            media_type: Producer's format, verified when a job requests retention.
 
         Returns:
             Owned input identifier.
@@ -160,6 +168,23 @@ class JobStore(Protocol):
 
         Raises:
             ProcessingError: If the input is unavailable to this owner.
+        """
+        ...
+
+    def read_job_inputs(
+        self, identifier: str, attempt: str
+    ) -> dict[str, dict[str, Any]]:
+        """Read the private JSON documents held by this running attempt.
+
+        Args:
+            identifier: Claimed computation ID.
+            attempt: Current worker attempt token.
+
+        Returns:
+            Immutable documents indexed by original input ID.
+
+        Raises:
+            ProcessingError: If the worker no longer owns these inputs.
         """
         ...
 

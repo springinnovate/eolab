@@ -166,7 +166,7 @@ class ProcessingWorker:
                 self.uploads,
                 row["input_uploads"],
                 retained_file,
-                row.get("retained_vectors", {}).get("_spatialFilterDrawings"),
+                row.get("spatial_filter_drawings"),
                 row.get("captured_vector_files"),
             )
 
@@ -346,20 +346,19 @@ class ProcessingWorker:
         prepared = await operation.prepare(context, calculation, authorized)
         if model is not None:
             prepared = record_model_preparation(row, model, prepared, self.limits)
-        retained = row.get("retained_vectors", {})
-        if retained:
+        if drawings := row.get("spatial_filter_drawings"):
             prepared = replace(
-                prepared, specification={**prepared.specification, **retained}
+                prepared,
+                specification={
+                    **prepared.specification,
+                    "_spatialFilterDrawings": drawings,
+                },
             )
         saved = await asyncio.to_thread(
             self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
         )
-        if retained:
-            saved["spec"] = {
-                key: value
-                for key, value in saved["spec"].items()
-                if key not in retained
-            }
+        if drawings:
+            saved["spec"].pop("_spatialFilterDrawings")
         row.update(saved)
         return authorized, checksum
 
@@ -396,7 +395,10 @@ class ProcessingWorker:
             model.calculation if model else row["spec"]
         )
         directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
-        if collections := row.get("retained_vectors", {}).get("_vectorInputs"):
+        if row.get("has_input_payloads"):
+            collections = await asyncio.to_thread(
+                self.jobs.read_job_inputs, row["id"], row["attempt_id"]
+            )
             writing = asyncio.create_task(
                 asyncio.to_thread(write_captured_vector_inputs, directory, collections)
             )
@@ -555,14 +557,11 @@ class ProcessingWorker:
         )
         if row is None:
             return False
-        spec = dict(row["spec"])
-        retained = {
-            key: spec.pop(key)
-            for key in ("_spatialFilterDrawings", "_vectorInputs")
-            if key in spec
-        }
-        if retained:
-            row.update(retained_vectors=retained, spec=spec)
+        if "_spatialFilterDrawings" in row["spec"]:
+            spec = dict(row["spec"])
+            row.update(
+                spatial_filter_drawings=spec.pop("_spatialFilterDrawings"), spec=spec
+            )
         identifier, attempt = row["id"], row["attempt_id"]
         task = asyncio.create_task(self._execute(row))
         finished = False

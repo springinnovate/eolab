@@ -3,11 +3,13 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from importlib.resources import files
+import json
 import time
 from typing import Any
 from uuid import uuid4
 
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 
 import eolab_app.processing.job_store as job_store_module
@@ -506,8 +508,26 @@ def test_version_22_upgrade_retains_known_turns_until_job_cleanup(
             connection.execute(
                 "ALTER TABLE processing.jobs ENABLE TRIGGER processing_release_inputs"
             )
+            original = {"type": "FeatureCollection", "name": "Sites", "features": []}
+            reference = {"id": "c" * 32, "sha256": "d" * 64}
+            connection.execute(
+                "INSERT INTO processing.jobs(id,status,operation,spec,reserved_bytes,expires_at) "
+                "VALUES ('drawn','queued','test',%s,0,now()+interval '7 days')",
+                (Jsonb({"_vectorInputs": {json.dumps(reference): original}}),),
+            )
+            connection.execute(
+                "INSERT INTO processing.job_subscribers(id,job_id,owner,request_key) "
+                "VALUES ('drawn','drawn','drawing-owner','drawn')"
+            )
             store.migrate()
             store.migrate()
+            claimed = store.claim_next_job()
+            assert claimed["id"] == "drawn" and claimed["has_input_payloads"]
+            assert store.read_job_inputs("drawn", claimed["attempt_id"]) == {
+                reference["id"]: original
+            }
+            assert "_vectorInputs" not in claimed["spec"]
+            connection.execute("DELETE FROM processing.jobs WHERE id='drawn'")
             assert connection.execute(
                 "SELECT owner FROM processing.job_turns WHERE job_id='shared'"
             ).fetchall() == [("served",)]
@@ -533,6 +553,7 @@ def test_version_22_upgrade_retains_known_turns_until_job_cleanup(
         "ALTER TABLE processing.jobs DROP COLUMN input_uploads",
         "DROP TRIGGER processing_release_inputs ON processing.jobs",
         "DROP TRIGGER record_job_turns ON processing.jobs",
+        "ALTER TABLE processing.job_inputs DROP CONSTRAINT job_inputs_input_id_fkey",
         "ALTER TABLE processing.transfers DROP CONSTRAINT transfers_job_id_fkey",
         "DELETE FROM processing.schema_version; INSERT INTO processing.schema_version VALUES (1)",
     ],
@@ -554,7 +575,7 @@ def test_schema_startup_leaves_partial_or_historical_layout_untouched(
             store.migrate()
             assert connection.execute(
                 "SELECT version FROM processing.schema_version ORDER BY version"
-            ).fetchall() == [(22,), (23,)]
+            ).fetchall() == [(22,), (23,), (24,)]
             assert (
                 connection.execute(
                     "SELECT column_name FROM information_schema.columns "

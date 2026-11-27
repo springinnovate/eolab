@@ -18,6 +18,7 @@ from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
     ArtifactDownload,
     JobInputFile,
+    JobInputReference,
     JobSubmission,
     ProcessingError,
     PreparedJobPlan,
@@ -1026,21 +1027,16 @@ class ProcessingService:
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
         drawings = {}
-        collections = {}
+        references = set(prepared.input_references)
         sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
         for selection in sources:
             if isinstance(selection, CapturedVectorSelection):
                 reference = selection.reference
-                key = reference.model_dump_json()
-                if key not in collections:
-                    collection = await asyncio.to_thread(
-                        self.jobs.get_input, owner, reference.id, reference.sha256
+                references.add(
+                    JobInputReference(
+                        reference.id, reference.sha256, "application/geo+json"
                     )
-                    if collection.get("type") != "FeatureCollection":
-                        raise ProcessingError(
-                            "invalid_vector_input", "Choose a saved vector layer.", 422
-                        )
-                    collections[key] = collection
+                )
             if isinstance(selection, DrawingSelection) and selection.polygonArea:
                 drawing = selection.polygonArea
                 key = drawing.model_dump_json()
@@ -1069,20 +1065,23 @@ class ProcessingService:
                 )
             files.append(file)
             captured.add(identity)
-        retained = {}
         if drawings:
-            retained["_spatialFilterDrawings"] = drawings
-        if collections:
-            retained["_vectorInputs"] = collections
-        if retained:
             prepared = replace(
                 prepared,
-                specification={**prepared.specification, **retained},
+                specification={
+                    **prepared.specification,
+                    "_spatialFilterDrawings": drawings,
+                },
                 work_key=None,
             )
         return (
-            replace(prepared, input_files=tuple(files), work_key=None)
-            if len(files) != len(prepared.input_files)
+            replace(
+                prepared,
+                input_files=tuple(files),
+                input_references=tuple(references),
+                work_key=None,
+            )
+            if references or len(files) != len(prepared.input_files)
             else prepared
         )
 
@@ -1457,7 +1456,11 @@ class ProcessingService:
             json.dumps(collection, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         identifier = await asyncio.to_thread(
-            self.jobs.save_input, owner, checksum, collection
+            self.jobs.save_input,
+            owner,
+            checksum,
+            collection,
+            media_type="application/geo+json",
         )
         return ProcessingInputReference(id=identifier, sha256=checksum)
 
