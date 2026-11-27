@@ -833,7 +833,7 @@ async function initializeCatalog(
             }
         },
         onAdded: onRenderingWorkspaceRequested,
-        onChange: refreshCatalogMapAction,
+        onChange: () => { refreshCatalogMapAction(); models?.render(); },
     });
     const catalogMapActionElements = {
         container: catalogMapActionsElement,
@@ -1674,6 +1674,16 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         allowedModelIds: visitorAvailability.allowedModelIds, recoveryScope: namedMapSlug ?? "",
         getCatalogItem: (source, signal) => catalogItemClient.get({collection: source.collectionId, id: source.itemId}, signal),
+        catalogRasters: {
+            findByTitles: (titles, signal) => new CatalogSearchClient(catalogUrl).findRasterTitles(titles, signal),
+            state: item => {
+                const {retained, pendingAction, feedback} = catalogMapActions.state(item);
+                return {onMap: retained, busy: Boolean(pendingAction), error: feedback?.isError ? feedback.message : ""};
+            },
+            add: async item => {
+                if (!catalogMapActions.state(item).retained) await catalogMapActions.toggle(item);
+            },
+        },
         /** Zoom to the chosen polygons and keep their outline visible while the user works on the map.
          * @param {Object} selection Exact Catalog asset, layer and feature filter.
          * @param {AbortSignal} signal Cancel a pending outline or remove it after display.

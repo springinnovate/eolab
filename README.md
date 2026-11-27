@@ -163,6 +163,8 @@ remains NoData.
 
 Choose **Prepared Earth Engine rasters** for an area and assessment year prepared by your administrator, or supply your own predictor and observed response rasters. After choosing a prepared area, select **Show analysis area on map** to zoom to its polygon and see the boundary while choosing reference sites. With the prepared inputs you can select datasets separately for each role. SRTM landforms and at least one observed response are required. [Original model and data sources](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
 
+To inspect a published input, choose an **Assessment year** and expand the predictor or response group. Under the dataset, choose the variable if it has several, then select **Add to map**. You can inspect a layer even when its dataset is unchecked for the model.
+
 For reference sites, select saved polygons or a raster mask. With a Catalog raster mask, valid finite nonzero values inside the area designate reference sites. For an uploaded mask, use a single-band Byte GeoTIFF with its own coordinate system, `1` for reference sites and `0` elsewhere. NoData is excluded. The output uses the equal-area EPSG:6933 grid.
 
 Administrators can open **Manage cached inputs** in model setup or visit `/admin-eolab`. Choose a Catalog polygon area and year, check coverage, and prepare missing tiles. Downloads continue after the page closes. Return to check progress, retry missing inputs, or download a preparation report. Locations without prepared data have no result, and the model needs enough usable reference sites to fit.

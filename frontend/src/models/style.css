@@ -46,6 +46,9 @@
 .models-habitat-dataset-required { display: block; color: var(--text-2); font-size: var(--font-size-support); }
 .models-habitat-datasets a { overflow-wrap: anywhere; }
 .models-habitat-dataset-details { grid-column: 1 / -1; color: var(--text-2); font-size: var(--font-size-support); overflow-wrap: anywhere; white-space: pre-line; }
+.models-habitat-map-choice { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.models-habitat-map-choice select { flex: 1 1 10rem; min-width: 0; max-width: 100%; }
+.models-habitat-map-choice .models-help { flex-basis: 100%; }
 .models-tool {
   display: block;
   width: 100%;

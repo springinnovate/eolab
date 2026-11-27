@@ -70,7 +70,7 @@ def test_publish_years_bands_masks_and_resume(tmp_path: Path) -> None:
                 json.dumps({"year": stack.year, "configuration_sha256": namespace.name})
             )
         for i, (name, band) in enumerate(bands.items(), 1):
-            expected[name] = (stack.year, i, band.display_name)
+            expected[name] = (stack.year, i, band.display_name, band.role)
 
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -78,7 +78,7 @@ def test_publish_years_bands_masks_and_resume(tmp_path: Path) -> None:
     assert {p.stem for p in rasters} == expected.keys()
     assert {value[0] for value in expected.values()} == set(years)
     for path in rasters:
-        year, i, label = expected[path.stem]
+        year, i, label, role = expected[path.stem]
         with rasterio.open(path) as dataset:
             assert dataset.count == 1
             assert dataset.descriptions == (label,)
@@ -92,6 +92,10 @@ def test_publish_years_bands_masks_and_resume(tmp_path: Path) -> None:
             assert pixels.mask[0, 8] and pixels[0, 600] == year + i + 150
         item = build_stac_item(output, path)
         assert item["properties"]["title"] == f"{label} (assessment year {year})"
+        assert item["properties"]["description"].startswith(
+            f"Prepared Ecosystem Condition {role} for assessment year {year}."
+        )
+        assert item["assets"]["data"]["raster:bands"][0]["description"] == label
 
     preserved = rasters[0].stat().st_mtime_ns
     rasters[-1].unlink()

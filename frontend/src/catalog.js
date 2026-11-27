@@ -1117,13 +1117,37 @@ export class CatalogSearchClient {
         return this.request(paginationLink);
     }
 
+    /** Retrieve mounted raster Items with the requested exact Catalog titles, including duplicates.
+     * @param {string[]} titles Published titles to look up in one search.
+     * @param {AbortSignal} signal Cancels this lookup when the caller changes its selection.
+     * @return {Promise<Object[]>} All matching Items across the provider's pages.
+     * @throws {Error} If the Catalog request fails or the lookup is abandoned.
+     */
+    async findRasterTitles(titles, signal) {
+        if (!titles.length) return [];
+        const filters = titles.map(title => ({op: "=", args: [{property: "title"}, title]}));
+        const items = [];
+        let link = {href: `${this.catalogUrl}/search`, method: "POST", body: {
+            collections: [MOUNTED_GEOTIFF_COLLECTION_ID], limit: titles.length,
+            "filter-lang": "cql2-json", filter: filters.length === 1 ? filters[0] : {op: "or", args: filters},
+        }};
+        while (link) {
+            const page = await this.request(link, signal);
+            if (page === null) throw new DOMException("Catalog lookup superseded", "AbortError");
+            items.push(...page.features);
+            link = findPaginationLink(page, ["next"]);
+        }
+        return items;
+    }
+
     /**
      * Executes one GET or POST STAC link.
      *
      * @param {Object} stacLink STAC link containing href and optional request data.
+     * @param {AbortSignal} [signal] Optional caller lifetime for this page.
      * @return {Promise<Object|null>} ItemCollection, or null when superseded.
      */
-    async request(stacLink) {
+    async request(stacLink, signal) {
         if (typeof stacLink?.href !== "string") {
             throw new TypeError("STAC pagination link has no href");
         }
@@ -1143,7 +1167,7 @@ export class CatalogSearchClient {
         const requestOptions = {
             method,
             headers: requestHeaders,
-            signal: abortController.signal
+            signal: signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal
         };
         if (method === "POST") {
             requestHeaders.set("Content-Type", "application/json");
