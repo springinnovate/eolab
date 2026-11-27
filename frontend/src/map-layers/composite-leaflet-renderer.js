@@ -1,10 +1,16 @@
 /** Present server-composed map tiles and track recovery in the current view. */
 
 import { TileRecovery } from "./tile-recovery.js";
+import { revealLoadedRasterFrame } from "./raster-frame.js";
 
 /** @typedef {import("./tile-recovery.js").MapTileStatus} MapTileStatus */
 
-/** Own one composite grid; never retain an old layer stack behind missing tiles. */
+/** @typedef {import("./raster-frame.js").MapFrame} MapFrame */
+/** @typedef {import("./raster-frame.js").ViewportFrame} ViewportFrame */
+/** @typedef {{layer:Object,recovery:TileRecovery,status:MapTileStatus}} CompositeGrid */
+/** @typedef {{signature:string,views:Map<string,MapFrame>,layers:Object[],grid:CompositeGrid|null,request:AbortController,status:MapTileStatus}} CompositeFrame */
+
+/** Draw the current composite stack and hand off between observations of the same raster. */
 export class CompositeLeafletRenderer {
     /**
      * Connect tile presentation to its map and status observer.
@@ -12,66 +18,85 @@ export class CompositeLeafletRenderer {
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Leaflet map.
      * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}} configuration.client Plan client.
-     * @param {(status:MapTileStatus,displayed:string[])=>void} [configuration.onStatus] Current viewport status and layer names whose tiles are fully displayed.
+     * @param {(status:MapTileStatus,displayed:Map<string,ViewportFrame>)=>void} [configuration.onStatus] Tile progress and the frames drawn or outside the viewport.
      */
     constructor({ leaflet, leafletMap, client, onStatus = () => {} }) {
         this.leaflet = leaflet;
         this.leafletMap = leafletMap;
         this.client = client;
         this.onStatus = onStatus;
-        this.signature = null;
-        this.layers = [];
-        this.generation = 0;
-        this.abortController = null;
-        this.grid = null;
+        this.selected = null;
+        this.drawn = null;
         this.prepared = new Map();
-        this.planFailed = false;
         this.destroyed = false;
     }
 
     /**
-     * Replace the displayed stack and prepare its new tiles.
-     * Old pixels are removed immediately so a failed replacement cannot imply
-     * that the old layer selection or style is still current.
-     * @param {Object[]} layers Authorized top-first rendering descriptors.
+     * Draw an authorized stack, retaining the displayed grid during a date change.
+     * @param {Object[]} layers Top-first server rendering descriptors, including opacity.
+     * @param {{keepPreviousFrame?:boolean,views?:Map<string,MapFrame>}} [options] Source grids and observations in this exact stack.
      * @return {void}
      */
-    update(layers) {
+    update(layers, {keepPreviousFrame = false, views = new Map()} = {}) {
         if (this.destroyed) return;
         const signature = JSON.stringify(layers);
-        if (signature === this.signature) return;
-        this.clear();
-        this.signature = signature;
-        this.layers = layers;
-        if (layers.length === 0) return;
+        if (this.selected?.signature === signature) {
+            this.selected.views = views;
+            this.#report();
+            return;
+        }
+        if (keepPreviousFrame && !this.drawn && this.selected?.grid?.recovery.hasLoadedTilesInView) this.drawn = this.selected;
+        if (this.selected !== this.drawn) this.#release(this.selected);
+        if (!keepPreviousFrame || !layers.length) {
+            this.#release(this.drawn);
+            this.drawn = null;
+        }
+        if (!layers.length) {
+            this.selected = null;
+            this.#report();
+            return;
+        }
+        if (this.drawn?.signature === signature) {
+            this.selected = this.drawn;
+            this.selected.views = views;
+            this.#report();
+            return;
+        }
+        const frame = {layers, signature, views, grid: null, request: new AbortController(),
+            status: {phase: "preparing", total: 0, loaded: 0, failed: 0}};
+        this.selected = frame;
         const staged = this.prepared.get(signature);
         if (staged) {
             staged.detach();
-            this.grid = staged.grid;
-            this.grid.layer.getContainer().style.visibility = "";
-            this.grid.recovery.refresh();
+            frame.grid = staged.grid;
+            if (!this.drawn) revealLoadedRasterFrame(frame.grid.layer);
+            frame.grid.recovery.refresh();
             return;
         }
-        const generation = this.generation;
-        const abortController = new AbortController();
-        this.abortController = abortController;
-        this.#emitStatus("preparing");
-        void this.client.create(layers, abortController.signal).then(
-            (plan) => {
-                if (generation !== this.generation || this.destroyed) return;
-                this.abortController = null;
-                this.grid = this.#createGrid(plan);
-                this.grid.layer.addTo(this.leafletMap);
-                this.grid.recovery.refresh();
+        this.#report();
+        void this.client.create(layers, frame.request.signal).then(
+            plan => {
+                if (frame !== this.selected) return;
+                frame.grid = this.#createGrid(plan);
+                frame.grid.layer.addTo(this.leafletMap);
+                if (this.drawn) frame.grid.layer.getContainer().hidden = true;
+                frame.grid.recovery.refresh();
             },
-            (error) => {
-                if (generation !== this.generation || this.destroyed) return;
-                this.abortController = null;
-                this.planFailed = true;
-                this.#emitStatus("error", error instanceof Error
-                    ? error.message : "Map contents could not be prepared.");
+            error => {
+                if (frame !== this.selected) return;
+                frame.status = {...frame.status, phase: "error",
+                    message: error instanceof Error ? error.message : "Map contents could not be prepared."};
+                this.#report();
             },
         );
+    }
+
+    /** Return the source grid and observation used to draw a row of the displayed composite.
+     * @param {string} key Retained map-layer key.
+     * @return {MapFrame|undefined} Row snapshot from the displayed grid.
+     */
+    drawnView(key) {
+        return this.drawn?.views.get(key);
     }
 
     /**
@@ -107,7 +132,7 @@ export class CompositeLeafletRenderer {
             this.prepared.set(signature, {grid, detach, release});
             signal.addEventListener("abort", release, {once: true});
             grid.layer.addTo(this.leafletMap);
-            grid.layer.getContainer().style.visibility = "hidden";
+            grid.layer.getContainer().hidden = true;
             grid.recovery.refresh();
         });
     }
@@ -118,30 +143,34 @@ export class CompositeLeafletRenderer {
      * @return {void}
      */
     retryFailedTiles() {
-        if (this.destroyed) return;
-        if (this.planFailed) {
-            this.signature = null;
-            this.update(this.layers);
-            return;
-        }
-        this.grid?.recovery.retryFailedTiles();
+        const frame = this.selected;
+        if (!frame) return;
+        if (frame.status.phase === "error") {
+            this.selected = null;
+            this.update(frame.layers, {views: frame.views, keepPreviousFrame: Boolean(this.drawn)});
+        } else frame.grid?.recovery.retryFailedTiles();
     }
 
-    /** Remove the grid, cancel retries, and invalidate plan responses. @return {void} */
+    /** Release both frames and invalidate outstanding plan responses. @return {void} */
     clear() {
-        this.signature = null;
-        this.layers = [];
-        this.generation += 1;
-        this.abortController?.abort();
-        this.abortController = null;
-        this.planFailed = false;
-        const grid = this.grid;
-        this.grid = null;
-        if (grid) {
-            grid.recovery.destroy();
-            this.leafletMap.removeLayer(grid.layer);
+        if (this.selected !== this.drawn) this.#release(this.selected);
+        this.#release(this.drawn);
+        this.selected = null;
+        this.drawn = null;
+        this.#report();
+    }
+
+    /** Cancel a plan and detach its tile grid when replaced or removed.
+     * @param {CompositeFrame|null} frame Composite to retire.
+     * @return {void}
+     */
+    #release(frame) {
+        if (!frame) return;
+        frame.request.abort();
+        if (frame.grid) {
+            frame.grid.recovery.destroy();
+            this.leafletMap.removeLayer(frame.grid.layer);
         }
-        this.#emitStatus("idle");
     }
 
     /** Remove tiles and detach the map observer permanently. @return {void} */
@@ -155,8 +184,8 @@ export class CompositeLeafletRenderer {
     /**
      * Create the ordinary WMS tile grid for either a visible or an upcoming map.
      * @param {{wmsUrl:string}} plan Authorized WMS plan.
-     * @param {(status:MapTileStatus)=>void} [onPrepared] Tile progress before attachment as the displayed stack.
-     * @return {{layer:Object,recovery:TileRecovery}} Grid and its visible-tile observer.
+     * @param {(status:MapTileStatus)=>void} [onPrepared] Tile progress before this grid is selected for display.
+     * @return {CompositeGrid} Grid and its current visible-tile counts.
      */
     #createGrid(plan, onPrepared) {
         const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
@@ -164,21 +193,36 @@ export class CompositeLeafletRenderer {
             transparent: true, version: "1.1.1", noWrap: true,
             maxZoom: 22,
         });
-        const recovery = new TileRecovery(this.leafletMap, layer, status => {
-            if (this.grid?.layer === layer) {
-                this.onStatus(status, status.phase === "complete" ? this.layers.map(item => item.layerName) : []);
-            } else onPrepared?.(status);
+        const grid = {layer, status: {phase: "loading", total: 0, loaded: 0, failed: 0}};
+        grid.recovery = new TileRecovery(this.leafletMap, layer, status => {
+            grid.status = status;
+            if (this.selected?.grid === grid) {
+                if (this.drawn !== this.selected && status.phase === "complete") {
+                    if (this.drawn) {
+                        revealLoadedRasterFrame(layer, this.drawn.grid.layer);
+                        this.#release(this.drawn);
+                    }
+                    this.drawn = grid.recovery.hasLoadedTilesInView ? this.selected : null;
+                }
+                this.#report();
+            } else if (this.drawn?.grid === grid) this.#report();
+            else onPrepared?.(status);
         });
-        return {layer, recovery};
+        return grid;
     }
 
-    /**
-     * Report a state that has no grid counts yet.
-     * @param {MapTileStatus["phase"]} phase Preparation or lifecycle state.
-     * @param {string} [message] Optional plan error.
-     * @return {void}
-     */
-    #emitStatus(phase, message) {
-        this.onStatus({ phase, total: 0, loaded: 0, failed: 0, message }, []);
+    /** Report incoming progress with the rows of the grid that has pixels in this viewport. @return {void} */
+    #report() {
+        const status = this.selected?.grid?.status ?? this.selected?.status ??
+            {phase: "idle", total: 0, loaded: 0, failed: 0};
+        if (this.drawn?.grid.recovery.hasLoadedTilesInView) {
+            this.onStatus(status, this.drawn.views);
+        } else {
+            const views = new Map();
+            if (status.phase === "complete" && status.total === 0) {
+                for (const [key, frame] of this.selected.views) views.set(key, {...frame, outsideViewport: true});
+            }
+            this.onStatus(status, views);
+        }
     }
 }

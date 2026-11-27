@@ -19,7 +19,7 @@ const RETRY_DELAYS_MILLISECONDS = Object.freeze([1000, 4000, 10000, 15000, 30000
 export class TileRecovery {
     /**
      * Observe a grid before its first attachment to the map.
-     * @param {Object} map Leaflet map with zoom, pixel bounds and public events.
+     * @param {Object} map Leaflet map with zoom scales, pixel bounds and public events.
      * @param {Object} layer Leaflet WMS layer with public tile events and optional
      * reloadTile(image) transport for requests that cannot reload an image URL.
      * @param {(status:MapTileStatus)=>void} onStatus Current-view status observer.
@@ -29,13 +29,12 @@ export class TileRecovery {
         this.layer = layer;
         this.onStatus = onStatus;
         this.tiles = new Map();
-        this.loading = false;
+        /** Whether a loaded tile covers the viewport, including one Leaflet retains during a zoom. @type {boolean} */
+        this.hasLoadedTilesInView = false;
         this.destroyed = false;
         this.scheduled = false;
         this.onMove = () => this.refresh();
         this.handlers = {
-            loading: () => { this.loading = true; this.refresh(); },
-            load: () => { this.loading = false; this.refresh(); },
             tileloadstart: ({ tile, coords }) => {
                 this.forget(tile);
                 this.tiles.set(tile, { coords, source: tile.src, phase: "loading", attempts: 0, timer: null });
@@ -72,6 +71,7 @@ export class TileRecovery {
     /** Cancel timers and detach all observers, leaving the layer to its owner. @return {void} */
     destroy() {
         this.destroyed = true;
+        this.hasLoadedTilesInView = false;
         for (const record of this.tiles.values()) clearTimeout(record.timer);
         this.tiles.clear();
         for (const [event, handler] of Object.entries(this.handlers)) this.layer.off(event, handler);
@@ -130,12 +130,22 @@ export class TileRecovery {
      * @return {boolean} Whether the tile is currently visible.
      */
     isVisible(record) {
-        const { x, y, z } = record.coords;
-        if (z !== Math.round(this.map.getZoom())) return false;
+        const zoom = this.map.getZoom();
+        return record.coords.z === Math.round(zoom) && this.#intersectsViewport(record.coords, zoom);
+    }
+
+    /** Test a tile's footprint in the viewport's pixel coordinates.
+     * @param {{x:number,y:number,z:number}} coords Tile column, row and native zoom.
+     * @param {number} zoom Current map zoom, including fractional steps.
+     * @return {boolean} Whether the scaled tile overlaps the viewport.
+     */
+    #intersectsViewport({x, y, z}, zoom) {
         const bounds = this.map.getPixelBounds();
         const size = this.layer.getTileSize();
-        return x * size.x < bounds.max.x && (x + 1) * size.x > bounds.min.x &&
-            y * size.y < bounds.max.y && (y + 1) * size.y > bounds.min.y;
+        const scale = zoom === z ? 1 : this.map.getZoomScale(zoom, z);
+        const width = size.x * scale, height = size.y * scale;
+        return x * width < bounds.max.x && (x + 1) * width > bounds.min.x &&
+            y * height < bounds.max.y && (y + 1) * height > bounds.min.y;
     }
 
     /** Cancel offscreen retries and publish counts after the current event burst. @return {void} */
@@ -153,13 +163,16 @@ export class TileRecovery {
         queueMicrotask(() => {
             this.scheduled = false;
             if (this.destroyed) return;
-            const tiles = [...this.tiles.values()].filter(record => this.isVisible(record));
+            const records = [...this.tiles.values()];
+            const tiles = records.filter(record => this.isVisible(record));
             const loaded = tiles.filter(record => record.phase === "loaded").length;
+            const zoom = this.map.getZoom();
+            this.hasLoadedTilesInView = loaded > 0 || records.some(({coords, phase}) => phase === "loaded" &&
+                coords.z !== Math.round(zoom) && this.#intersectsViewport(coords, zoom));
             const failed = tiles.filter(record => record.phase === "failed").length;
             const retrying = tiles.some(record => record.phase === "retrying");
             const pending = tiles.length - loaded - failed;
-            const phase = retrying ? "retrying" : pending || (!tiles.length && this.loading)
-                ? "loading" : failed ? "incomplete" : "complete";
+            const phase = retrying ? "retrying" : pending ? "loading" : failed ? "incomplete" : "complete";
             this.onStatus({ phase, total: tiles.length, loaded, failed });
         });
     }
