@@ -1,7 +1,7 @@
 """Receive a compact model invocation and its input documents in one request."""
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator
 from hashlib import sha256
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from eolab_app.drawings.models import DrawingFeatureCollection
-from eolab_app.catalog_selection import SavedDrawingReference
+from eolab_app.polygon_areas import CapturedPolygonBoundary
 from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.models import (
     MAX_STAGED_INPUT_BYTES,
@@ -57,8 +57,8 @@ async def input_lines(chunks: AsyncIterator[bytes]) -> AsyncGenerator[bytes, Non
 
 def prepare_drawing(
     body: bytes, reference: JobInputReference, path: Path
-) -> JobInputDocument | SavedDrawingReference:
-    """Write original drawing features or identify the editor revision to read.
+) -> JobInputDocument:
+    """Validate and write the submitted features or captured boundary polygons.
 
     Args:
         body: Original document bytes, excluding the newline delimiter.
@@ -66,7 +66,7 @@ def prepare_drawing(
         path: Private file assigned by the request handler.
 
     Returns:
-        The validated features on disk, or a revision requiring an authorized editor read.
+        The validated source on disk, tied to its original transmitted checksum.
 
     Raises:
         HTTPException: The checksum, geometry or normalized input size is invalid.
@@ -78,8 +78,9 @@ def prepare_drawing(
         )
     try:
         if reference.media_type == "application/json":
-            return SavedDrawingReference.model_validate_json(body)
-        document = DrawingFeatureCollection.normalize_document(body).encode("utf-8")
+            document = CapturedPolygonBoundary.model_validate_json(body).model_dump_json().encode("utf-8")
+        else:
+            document = DrawingFeatureCollection.normalize_document(body).encode("utf-8")
     except ValidationError as error:
         raise HTTPException(
             422,
@@ -98,18 +99,15 @@ class ModelInputStream:
         self,
         chunks: AsyncIterator[bytes],
         directory: Path,
-        capture_filter: Callable[[SavedDrawingReference], Awaitable[bytes]],
     ) -> None:
         """Bind the request stream to its private temporary directory.
 
         Args:
             chunks: Incoming newline-delimited JSON.
             directory: Directory owned and removed by the HTTP request.
-            capture_filter: Read the selected polygons at the requested editor revision.
         """
         self.lines = input_lines(chunks)
         self.directory = directory
-        self.capture_filter = capture_filter
 
     async def read_invocation(self) -> ModelRunRequest:
         """Return the compact invocation before reading its input attachments.
@@ -161,11 +159,6 @@ class ModelInputStream:
             reference = references[key]
             document = await asyncio.to_thread(prepare_drawing, body, reference, path)
             del body
-            if isinstance(document, SavedDrawingReference):
-                polygons = await self.capture_filter(document)
-                await asyncio.to_thread(path.write_bytes, polygons)
-                del polygons
-                document = JobInputDocument(reference, path)
             documents.append(document)
         if await anext(self.lines, None) is not None:
             raise HTTPException(422, "The submission contains an unexpected drawing.")

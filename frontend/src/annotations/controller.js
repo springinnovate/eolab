@@ -571,6 +571,27 @@ export class AnnotationController {
         return layer && this.layers.has(layer.id) ? exportAnnotationGeoJSON(this.displayLayer(layer)) : null;
     }
 
+    /** Snapshot the selected features of an acknowledged drawing before saving a model retry.
+     * @param {{drawingLayerId:string,revision:number,featureIds:string[]}} reference Applied spatial filter.
+     * @return {Promise<{polygons:Object[]}>} Detached polygon geometries in original source order.
+     * @throws {Error} If the source revision or selected features are unavailable.
+     */
+    async exportDrawingBoundary({drawingLayerId, revision, featureIds}) {
+        const ids = new Set(featureIds);
+        const layer = this.model.layers.find(({drawingSource}) => drawingSource?.id === drawingLayerId &&
+            drawingSource.revision === revision && !drawingSource.pending);
+        let features;
+        if (layer) {
+            features = exportAnnotationGeoJSON({...layer, polygons: layer.polygons.filter(polygon => ids.has(polygon.id))}).features;
+        } else {
+            const record = await this.sourceApi.get(drawingLayerId);
+            if (record.revision !== revision) throw new Error("The drawing changed. Reapply its filter before running the tool.");
+            features = record.collection.features.filter(feature => ids.has(feature.id));
+        }
+        if (features.length !== ids.size) throw new Error("Some selected polygons are unavailable. Reapply the drawing filter.");
+        return {polygons: features.map(feature => feature.geometry)};
+    }
+
     /** Return annotation fields and callbacks for the existing filter dialog.
      * @param {string} key Map-layer identity.
      * @return {Object|null} Field editor target, or null for a different owner.

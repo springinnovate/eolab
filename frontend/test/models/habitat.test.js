@@ -129,10 +129,10 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
     const controller = new ModelsController({api, jobs, view, getContext: () => ({...context,
         vectors: [...context.vectors.map(value => ({geometryKind: "polygon", ...value})),
             ...modelVectorSources([], (context.drawings ?? []).map(target => describeDrawingVectorLayer(target)))]}), showAreaOutline, catalogRasters,
-        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, key => {
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, {readLayer: key => {
             const target = context.drawings?.find(value => value.key === key);
             return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
-        }, collection => api.captureVectorInput(collection), acquired, isCurrent),
+        }, readBoundary: assert.fail}, collection => api.captureVectorInput(collection), acquired, isCurrent),
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}

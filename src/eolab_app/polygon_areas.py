@@ -51,10 +51,16 @@ class SummaryPolygon(BaseModel):
         return self
 
 
-class PolygonSummaryInput(BaseModel):
-    """Committed, filtered polygons; names, notes and styles are not calculation inputs."""
+class CapturedPolygonBoundary(BaseModel):
+    """Preserve the original selected polygons of a model intersection, including an empty selection."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+    polygons: tuple[SummaryPolygon, ...]
+
+
+class PolygonSummaryInput(CapturedPolygonBoundary):
+    """Committed, filtered polygons; names, notes and styles are not calculation inputs."""
+
     polygons: Annotated[tuple[SummaryPolygon, ...], Field(min_length=1, max_length=500)]
 
     @model_validator(mode="after")

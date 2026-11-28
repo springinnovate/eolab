@@ -57,10 +57,10 @@ function setup(recipe = recipeFor(), drawings = []) {
     const clock = {setTimeout() {}, clearTimeout() {}}, jobs = new ProcessingJobs(api, clock);
     const controller = new ModelsController({api, jobs, view, clock, getContext: () => context,
         storage: {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)},
-        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, key => {
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, {readLayer: key => {
             const target = drawings.find(value => value.key === key);
             return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
-        }, collection => api.captureVectorInput(collection), acquired, isCurrent),
+        }, readBoundary: assert.fail}, collection => api.captureVectorInput(collection), acquired, isCurrent),
         prepareVector: () => { throw Error("Configured vector inputs must not preflight scan features"); },
         closeVectorFilter() {}, onOpen() {}, onClose() {}, newId: () => "d".repeat(32)});
     controller.chooseModel(recipe);
@@ -174,17 +174,21 @@ test("shared drawing intersections bind once across local and file inputs and re
         documents.push(document);
         return {id: String(documents.length).repeat(32), sha256: "a".repeat(64)};
     };
-    await bindModelVectorInputs(inputs, () => ({type: "FeatureCollection", features: []}), capture, id => released.push(id), () => true);
+    const geometry = {type: "Polygon", coordinates: [[[0,0], [1,0], [0,1], [0,0]]]};
+    const boundary = {polygons: [geometry]};
+    await bindModelVectorInputs(inputs, {readLayer: () => ({type: "FeatureCollection", features: []}),
+        readBoundary: async saved => { assert.deepEqual(saved, revision); return structuredClone(boundary); }},
+        capture, id => released.push(id), () => true);
     assert.equal(documents.length, 2);
     assert.equal(released.length, 2);
-    assert.deepEqual(documents.find(doc => doc.featureIds), revision);
+    assert.deepEqual(documents[1], boundary, "retry owns the original polygons after a revision change");
     assert.ok(JSON.stringify(inputs).length < 16384);
     const bound = inputs.first.selection.filter.rules[0].source;
     assert.equal(bound.kind, "drawing");
     assert.deepEqual(bound.filter, predicate);
     assert.deepEqual(bound.polygonArea, inputs.second.selection.filter.rules[0].source.polygonArea);
     assert.deepEqual(Object.keys(bound.polygonArea).sort(), ["id", "sha256"]);
-    await bindModelVectorInputs(inputs, assert.fail, assert.fail, assert.fail, () => true);
+    await bindModelVectorInputs(inputs, {readLayer: assert.fail, readBoundary: assert.fail}, assert.fail, assert.fail, () => true);
 });
 
 test("multiple configured vector inputs retain independent source, field and filter choices", () => {

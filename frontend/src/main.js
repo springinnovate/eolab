@@ -1768,7 +1768,8 @@ async function initializeCatalog(
             };
         },
         bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs,
-            key => annotations?.exportVectorLayer(key), collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
+            {readLayer: key => annotations.exportVectorLayer(key), readBoundary: ref => annotations.exportDrawingBoundary(ref)},
+            collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
         /** Read selected features without requiring a display layer.
          * @param {import("./vector/sampling.js").VectorSamplingSource & {filter:Object}} source Original vector identity and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.

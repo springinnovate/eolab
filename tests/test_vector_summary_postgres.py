@@ -397,7 +397,7 @@ def test_duplicate_preserves_drawing_intersection(
 
     service.read_filter_drawing = read_filter
     target = capture_drawing(client, geometry)
-    saved_doc = selected.model_dump_json().encode()
+    saved_doc = json.dumps({"polygons": [geometry] * len(selected.featureIds)}).encode()
     if origin == "device":
         area = client.post(
             "/api/processing/polygon-areas",

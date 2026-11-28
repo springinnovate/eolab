@@ -6,7 +6,6 @@ their results. Clips, raster summaries and model runs share the same job lifecyc
 
 import asyncio
 from contextlib import suppress
-from functools import partial
 import hashlib
 import json
 import re
@@ -513,7 +512,7 @@ def create_processing_router(
                 "content": {
                     "application/x-ndjson": {
                         "schema": {"type": "string"},
-                        "description": "One model invocation, an array of attached input IDs, then one original GeoJSON collection or selected drawing revision per ID, each on its own line.",
+                        "description": "One model invocation, an array of attached input IDs, then one original GeoJSON collection or captured polygon boundary per ID, each on its own line.",
                     }
                 },
             },
@@ -541,11 +540,7 @@ def create_processing_router(
             request, response, mutation_header="X-EOLab-Processing"
         )
         with TemporaryDirectory() as directory:
-            stream = ModelInputStream(
-                request.stream(),
-                FilePath(directory),
-                partial(service.capture_filter_polygons, owner),
-            )
+            stream = ModelInputStream(request.stream(), FilePath(directory))
             body = await stream.read_invocation()
             submitting = asyncio.create_task(
                 service.submit_model_run(

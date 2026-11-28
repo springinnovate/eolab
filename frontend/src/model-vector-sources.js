@@ -36,14 +36,14 @@ export function modelVectorSources(files, drawings) {
  * Copies every selected layer and drawing filter before the first capture. Repeated uses share the same
  * original features, while retaining each input's independently chosen predicate.
  * @param {Object} inputs Detached invocation inputs to bind before persisting or sending.
- * @param {(key:string)=>Object|null} readCollection Export the chosen layer's committed features only.
- * @param {(document:Object)=>Promise<Object>} capture Keep original GeoJSON or a saved drawing revision for admission.
+ * @param {{readLayer:(key:string)=>Object|null,readBoundary:(reference:Object)=>Promise<Object>}} sources Drawing owner providing detached layers and selected boundary polygons.
+ * @param {(document:Object)=>Promise<Object>} capture Keep original GeoJSON or boundary polygons for admission.
  * @param {(id:string)=>void} onCaptured Record every new reference for cleanup on failure.
  * @param {()=>boolean} isCurrent Whether the requesting setup is still active.
  * @return {Promise<void>|undefined} Pending capture when drawings need saving, or undefined when the inputs are ready.
  * @throws {Error} If a chosen layer was removed or its capture fails.
  */
-export function bindModelVectorInputs(inputs, readCollection, capture, onCaptured, isCurrent) {
+export function bindModelVectorInputs(inputs, sources, capture, onCaptured, isCurrent) {
     const layers = new Map(), boundaries = new Map();
     /** Collect all vector selections, including group members, without interpreting recipe inputs.
      * @param {Object} value A node of the detached model invocation.
@@ -67,22 +67,22 @@ export function bindModelVectorInputs(inputs, readCollection, capture, onCapture
     collect(inputs);
     if (!layers.size && !boundaries.size) return;
     const captures = Array.from(layers, ([key, uses]) => {
-        const collection = readCollection(key);
+        const collection = sources.readLayer(key);
         if (!collection) throw new Error("The chosen vector layer was removed. Choose another layer.");
         return {document: collection, bind: reference => {
             for (const use of uses) use.selection = {kind: "capturedVector", reference, layerName: "features", filter: use.selection.filter};
         }};
     });
-    for (const uses of boundaries.values()) {
-        captures.push({document: uses[0].polygonArea, bind: reference => {
-            for (const source of uses) source.polygonArea = reference;
-        }});
-    }
     /** Bind each captured reference and record it for cleanup if this setup is abandoned.
      * @return {Promise<void>} Resolves when every chosen source is bound or the setup is superseded.
      * @throws {Error} If the device cannot retain a source.
      */
     async function captureSources() {
+        const boundaryCaptures = boundaries.size ? await Promise.all(Array.from(boundaries.values(), async uses => ({
+            document: await sources.readBoundary(uses[0].polygonArea),
+            bind: reference => { for (const source of uses) source.polygonArea = reference; },
+        }))) : [];
+        captures.push(...boundaryCaptures);
         for (const {document, bind} of captures) {
             const reference = await capture(document);
             onCaptured(reference.id);
