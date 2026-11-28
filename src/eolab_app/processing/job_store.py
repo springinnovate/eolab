@@ -1567,7 +1567,9 @@ class PostgresJobStore:
             cursor.execute(
                 "DELETE FROM processing.job_inputs r USING processing.jobs j WHERE j.id=r.job_id "
                 "AND (j.status='deleted' OR (j.status NOT IN ('queued','running','cancelling','ready') "
-                "AND j.retained_metadata IS NULL))"
+                "AND (j.retained_metadata IS NULL OR NOT EXISTS ("
+                "SELECT FROM processing.job_subscribers s WHERE s.job_id=j.id "
+                "AND (s.status IS DISTINCT FROM 'deleted' OR s.deletion_undo_until IS NOT NULL)))))"
             )
             cursor.execute(
                 "DELETE FROM processing.inputs i WHERE (i.expires_at<=now() OR i.expires_at IS NULL) "

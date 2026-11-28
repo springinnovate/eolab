@@ -55,7 +55,12 @@ def test_undo_restores_terminal_run_history(
         state: Terminal outcome to restore, including subscriber cancellation.
     """
     client, worker, _ = model_boundary
-    run = submit(client, model_request(client))
+    drawing = capture_drawing(client, rectangle(0.1, 9.1, 0.3, 9.3))
+    body = model_request(
+        client, "raster-clip",
+        inputs={"raster": SOURCE, "area": {"kind": "catalogSelection", "selection": drawing}},
+    )
+    run = submit(client, body)
     base = f"/api/processing/jobs/{run['jobId']}"
     if state == "cancelled":
         assert client.post(base + "/cancel", headers=HEADERS).status_code == 202
@@ -82,6 +87,17 @@ def test_undo_restores_terminal_run_history(
     assert response.json()["metadataExpiresAt"] == before["metadataExpiresAt"]
     assert client.get(base + "/invocation").status_code == 200
     assert not client.portal.call(worker.run_once)
+    with store._transaction() as cursor:
+        cursor.execute("SELECT FROM processing.inputs WHERE id=%s", (drawing["reference"]["id"],))
+        assert cursor.fetchone() is not None
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    assert client.post(
+        base + "/deletion/dismiss", json={"deletionId": offer["deletionId"]}, headers=HEADERS
+    ).status_code == 200
+    client.portal.call(worker.cleanup)
+    with store._transaction() as cursor:
+        cursor.execute("SELECT FROM processing.inputs WHERE id=%s", (drawing["reference"]["id"],))
+        assert cursor.fetchone() is None
 
 
 def test_old_run_history_is_retained_during_undo_without_reviving_metadata(
