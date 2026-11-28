@@ -1537,11 +1537,13 @@ async function initializeCatalog(
     /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
      * @param {string} key Drawing view to filter.
      * @param {Object} candidate Rule builder state.
-     * @param {()=>boolean} [current] Whether a source change that triggered this refresh is still current.
+     * @param {Object} [options] Source tracking and edit lifetime.
+     * @param {()=>boolean} [options.current] Whether the requested edit or source refresh is still active.
+     * @param {boolean} [options.sourcesTracked] Whether a passive refresh already recorded its source signature.
      * @return {Promise<Object|null>} Applied rules, or null after replacement or removal.
      * @throws {Error} If the polygon source cannot be read.
      */
-    async function applyDrawingFilter(key, candidate, current) {
+    async function applyDrawingFilter(key, candidate, {current, sourcesTracked = false} = {}) {
         const attempt = Symbol();
         drawingFilterAttempts.set(key, attempt);
         const layers = spatialPolygonLayers();
@@ -1557,11 +1559,33 @@ async function initializeCatalog(
         }
         const editor = annotations.filterTarget(key);
         if (!editor || drawingFilterAttempts.get(key) !== attempt || (current && !current())) return null;
-        if (spatial && !current) spatialViews.trackSources(key, captured, layers);
+        if (spatial && !sourcesTracked) spatialViews.trackSources(key, captured, layers);
         editor.apply(captured);
         return captured;
     }
     let modelFilterControls = null;
+    /** Expose the drawing owner's filter action to both Map contents and model setup.
+     * @param {string} key Map layer being edited.
+     * @param {()=>boolean} [current] Whether the inline edit is still active.
+     * @return {Object|null} The current drawing filter and its apply/cancel actions.
+     */
+    function drawingFilterTarget(key, current) {
+        const annotation = annotations?.filterTarget(key);
+        if (!annotation) return null;
+        const record = mapLayerController.getRecord(key);
+        return {...annotation,
+            filter: record?.requestedSpatialFilter ?? annotation.filter,
+            status: record?.spatialFilterError ?? annotation.status,
+            cancelPending: () => drawingFilterAttempts.delete(key),
+            apply: candidate => {
+                if (record) {
+                    delete record.requestedSpatialFilter;
+                    delete record.spatialFilterError;
+                }
+                return applyDrawingFilter(key, candidate, {current});
+            },
+        };
+    }
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
     vectorFilterControls = new VectorFilterControls({
@@ -1573,19 +1597,9 @@ async function initializeCatalog(
         onZoom: ([west, south, east, north]) => leafletMap.fitBounds(
             L.latLngBounds([[south, west], [north, east]]).pad(0.15), {padding: [24, 24], maxZoom: 14}),
         getTarget: (key) => {
-            const annotation = annotations?.filterTarget(key);
+            const drawing = drawingFilterTarget(key);
+            if (drawing) return drawing;
             const record = mapLayerController.getRecord(key);
-            if (annotation) return {...annotation,
-                filter: record?.requestedSpatialFilter ?? annotation.filter,
-                status: record?.spatialFilterError ?? annotation.status,
-                cancelPending: () => drawingFilterAttempts.delete(key),
-                apply: candidate => {
-                    if (record) {
-                        delete record.requestedSpatialFilter;
-                        delete record.spatialFilterError;
-                    }
-                    return applyDrawingFilter(key, candidate);
-                }};
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
                 key, label: record.entry.label,
@@ -1783,14 +1797,19 @@ async function initializeCatalog(
          */
         editVectorFilter: request => {
             modelFilterControls?.destroy();
-            const target = {key: request.key, label: request.source.label, source: request.source,
+            const layerKey = request.source.key;
+            const edit = new AbortController();
+            const drawing = drawingFilterTarget(layerKey, () => request.isCurrent() && !edit.signal.aborted);
+            const target = drawing ?? {key: layerKey, label: request.source.label, source: request.source,
                 fields: request.source.fields ?? [], filter: request.filter};
             modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
                 getPolygonLayers: key => spatialPolygonLayers(true).filter(layer => layer.key !== key)
                     .map(({id, label, count}) => ({id, label, count})),
-                getTarget: key => key === target.key && request.isCurrent() ? target : null});
-            modelFilterControls.open(request.key, {filter: request.filter, apply: async candidate => request.apply(await spatialViews.bind(request.key, candidate)), complete: request.complete, cancel: request.cancel,
-                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
+                getTarget: key => key === layerKey && request.isCurrent() ? target : null});
+            modelFilterControls.open(layerKey, {filter: request.filter,
+                apply: drawing?.apply ?? (async candidate => request.apply(await spatialViews.bind(layerKey, candidate))),
+                complete: request.complete, cancel: () => { edit.abort(); request.cancel(); },
+                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: () => { edit.abort(); request.close(); },
                 help: "Change the filter for this map item and every tool input using it. Create a copy to use a different filter.",
             });
         },
@@ -1837,7 +1856,7 @@ async function initializeCatalog(
                 try {
                     if (drawing) {
                         delete record.spatialFilterError;
-                        await applyDrawingFilter(key, requested, current);
+                        await applyDrawingFilter(key, requested, {current, sourcesTracked: true});
                     } else {
                         const captured = await spatialViews.bind(key, requested);
                         if (!current() || !mapLayerController.getRecord(key)) return;

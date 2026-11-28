@@ -26,7 +26,7 @@ export function modelVectorSources(files, drawings) {
         const selection = {kind: "localVector", key: target.key, filter};
         sources.push({key: target.key, label: target.label, originLabels: {group: "Drawn polygons", label: "Drawing"}, geometryKind: "polygon",
             fields: ANNOTATION_FIELDS, scalarFields: ANNOTATION_FIELDS, numericFields: [], filter,
-            selection, allSelection: {...selection, filter: EMPTY_VECTOR_FILTER}, editFilterInMap: true,
+            selection, allSelection: {...selection, filter: EMPTY_VECTOR_FILTER},
             featureCounts: target.featureCounts});
     }
     return sources;

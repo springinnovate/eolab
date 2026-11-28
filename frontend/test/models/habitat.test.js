@@ -1062,7 +1062,7 @@ test("manual Ecosystem inputs select filtered drawn layers and capture them toge
     assert.equal(sites.source.value, `vector:${references.key}`);
     assert.equal(sites.selectedCount.textContent, "1 of 3 features selected");
     assert.match(sites.filterDescription.textContent, /note equals/);
-    assert.equal(sites.editFilter.hidden, true);
+    assert.equal(sites.editFilter.hidden, false);
     assert.equal(sites.resampling, undefined);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(h.uploads, []);

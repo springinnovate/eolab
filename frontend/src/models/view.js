@@ -439,7 +439,6 @@ export class ModelsView {
         controls.source.setAttribute("aria-describedby", [controls.choiceHint?.id ?? "", controls.sourceOrigin.hidden ? "" : controls.sourceOrigin.id,
             rasterActive ? `${controls.rasterReason.id} ${controls.maskHint.id}` : ""].filter(Boolean).join(" "));
         controls.rasterReason.textContent = value.maskRaster?.available === false ? "This raster is no longer available. Choose another input." : "";
-        controls.editFilter.hidden = Boolean(selectedVector?.editFilterInMap);
         const rasterReady = Boolean(value.maskRaster) && value.maskRaster.available !== false;
         controls.vectorGroup.hidden = value.areaMode !== "vector";
         controls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(value.areaMode);

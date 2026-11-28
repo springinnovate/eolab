@@ -36,7 +36,7 @@ export class ModelsController {
      * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Show a model's chosen polygon through map composition.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
-     * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
+     * @param {(request:{host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
      * @param {()=>void} dependencies.closeVectorFilter Close the composed inline editor.
      * @param {(source:Object,area:Object)=>Promise<Object|null>} dependencies.applyMapFilter Commit checked features to their vector view before updating its rendering; display failure must not block analysis.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
@@ -620,7 +620,7 @@ export class ModelsController {
             input.areaMode === "vector" && input.vectorKey === key && !this.state.submitting;
         input.filterOpening = true; input.filterEditing = true; this.state.error = ""; this.render();
         try {
-            await this.editVectorFilter({key: `model:${draft.id}:${name}:${key}`, host: this.view.getVectorFilterHost(name), source: structuredClone(source),
+            await this.editVectorFilter({host: this.view.getVectorFilterHost(name), source: structuredClone(source),
                 filter: structuredClone(input.area?.selection?.filter ?? source.filter), isCurrent: () => isCurrent() && this.state.active,
                 apply: candidate => {
                     if (!isCurrent()) throw new Error("This tool setup changed. Open its filter again.");

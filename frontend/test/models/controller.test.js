@@ -1683,17 +1683,17 @@ test("model filtering checks features then updates the map through composition w
     h.controller.prepareVector = async source => ({selection: {...selection, filter: structuredClone(source.filter)}, matched: source.filter.rules[0]?.value === "South" ? 1 : 3, total: 8});
     h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
     await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
-    const doc = new FakeRasterControlDocument(); let request;
+    const doc = new FakeRasterControlDocument();
     const controls = new VectorFilterControls({documentContext: doc,
         getTarget: () => ({label: "Basins", fields: [{name: "BASIN", type: "str"}], filter: selection.filter,
             apply: () => assert.fail("Composition must own the map update"), cancelPending: () => assert.fail("Model filter must not cancel map work")}),
         inspection: {showFilter() {}, hideFilter() {}, updateLayerEditorName() {}},
         setTimer: () => assert.fail("Model filter must require explicit application"), clearTimer() {},
     });
-    h.controller.editVectorFilter = value => { request = value; controls.open(value.key, {...value, applyLabel: "Apply filter", filterLabel: "Selected features", onClose: value.close, help: "Choose features for this model."}); };
+    h.controller.editVectorFilter = value => { controls.open(value.source.key, {...value, applyLabel: "Apply filter", filterLabel: "Selected features", onClose: value.close, help: "Choose features for this model."}); };
     h.controller.closeVectorFilter = () => controls.close();
     await h.controller.openVectorFilter("area");
-    assert.match(request.key, /^model:/); assert.equal(controls.applyButton.textContent, "Apply filter");
+    assert.equal(controls.key, h.context.vectors[0].key); assert.equal(controls.applyButton.textContent, "Apply filter");
     assert.match(controls.applied.textContent, /^Selected features:/); assert.equal(controls.help.textContent, "Choose features for this model.");
     const input = controls.rules.children[0].children[2]; input.value = "South"; input.dispatchEvent(new Event("input"));
     assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "North");

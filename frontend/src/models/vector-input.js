@@ -41,7 +41,6 @@
  * @property {Object} selection Path-free source/layer identity and accepted predicate.
  * @property {Object} allSelection Same source/layer identity with no predicate.
  * @property {{matched:number,total:number}} [featureCounts] Counts already known to the source owner.
- * @property {boolean} [editFilterInMap] Whether the source owner edits its filter in Map contents.
  */
 
 /** Independent choices retained while one vector input is edited.
