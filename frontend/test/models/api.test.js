@@ -119,6 +119,20 @@ test("malformed model definitions and inconsistent progress are rejected", async
     await assert.rejects(broken.api.getJob(job().jobId), /model run details/);
 });
 
+test("timed job stages accept complete work intervals and reject inconsistent measurements", async () => {
+    const stage = {phase: "publish", description: "Verifying files", startedAt: "2026-10-08T00:00:00Z",
+        lastProgressAt: "2026-10-08T00:00:01Z", endedAt: null, completed: 1, total: 3, unit: "files"};
+    for (const change of [{}, {endedAt: "2026-10-08T00:00:02Z"}]) {
+        const stages = [{...stage, ...change}], h = fixture(() => job({progress: {stages}}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).progress.stages, stages);
+    }
+    for (const stages of [null, {}, [{...stage, lastProgressAt: "bad"}], [{...stage, endedAt: stage.startedAt}],
+        [{...stage, completed: 4}], [{...stage, unit: null}], [{...stage, description: " ".repeat(40)}]]) {
+        const h = fixture(() => job({progress: {stages}}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid model stage timings/);
+    }
+});
+
 test("model progress accepts optional descriptions and bounded literal text for unfamiliar phases", async () => {
     for (const progress of [{phase: "historical_stage"}, ...[null, "Measuring habitat", "x".repeat(200), "🌳".repeat(200), "Checking <strong>habitat</strong>"]
         .map(description => ({phase: "unfamiliar_stage", description}))]) {

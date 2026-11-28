@@ -342,6 +342,23 @@ class ModelIdentity(ModelReference):
     title: Label
 
 
+class ModelStageTiming(ModelSchema):
+    """A named stage's start, most recent measured work, end, and optional counts.
+
+    The last work time initially equals the start. A lease renewal alone does not
+    move it. An ended stage can have incomplete counters when the attempt stopped.
+    """
+
+    phase: str
+    description: str | None = None
+    startedAt: AwareDatetime
+    lastProgressAt: AwareDatetime
+    endedAt: AwareDatetime | None = None
+    completed: Annotated[int, Field(ge=0)] | None = None
+    total: Annotated[int, Field(ge=0)] | None = None
+    unit: str | None = None
+
+
 class ModelProgress(JobProgressResponse):
     """Completed and total work for the current stage of a model run.
 
@@ -350,8 +367,10 @@ class ModelProgress(JobProgressResponse):
     operation-owned plain text for the stage, limited to 200 Unicode characters.
     It may be absent for historical responses or unrecognized phases; clients
     then use a generic running-state label without interpreting ``phase``.
+    ``stages`` retains measured intervals in execution order for instrumented runs.
     """
 
+    stages: tuple[ModelStageTiming, ...] = ()
     description: (
         Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r"\S")]
         | None

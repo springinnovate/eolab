@@ -19,6 +19,7 @@ import psycopg
 import pytest
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing.stage_progress import stage_snapshot, stage_start
 from eolab_app.processing import model_runs
 from eolab_app.processing.habitat_models import QueuedHabitat
 from eolab_app.processing.model_run_contracts import ModelRunSpec, RunDocument
@@ -41,6 +42,100 @@ from catalog_selection_support import register_selection, write_geopackage_layer
 import eolab_app.processing.worker as worker_module
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.processing.job_store import PostgresJobStore
+
+
+@pytest.mark.parametrize("outcome", ["failed", "cancelled", "interrupted"])
+def test_recorded_stages_survive_heartbeats_and_model_history(
+    model_boundary: Any, store: PostgresJobStore, outcome: str
+) -> None:
+    """Read the same timed stages across polls, reopened Runs, and a stopped attempt.
+
+    Args:
+        model_boundary: Ordinary model admission and owner-authorized status routes.
+        store: Disposable PostgreSQL queue accepting fenced worker measurements.
+        outcome: Stop by failure, confirmed cancellation, or worker restart.
+    """
+    client, _, _ = model_boundary
+    request = model_request(
+        client,
+        "habitat-condition",
+        inputs={
+            "stack": {
+                "predictors": [{"name": "land", "source": SOURCE}],
+                "responses": [{"name": "cover", "source": SOURCE}],
+                "categoricalPredictor": "land",
+            },
+            "area": {"kind": "selectedArea", "selectedBounds": AREA},
+            "references": {"kind": "raster", "source": SOURCE},
+            "habitat_mask": None,
+            "preparation": {
+                "resampling": {
+                    "predictor_0": "nearest",
+                    "response_0": "nearest",
+                    "reference_mask": "nearest",
+                }
+            },
+        },
+    )
+    run = submit(client, request)
+    url = f"/api/processing/jobs/{run['jobId']}"
+    claim = store.claim_next_job()
+    identifier, attempt = claim["id"], claim["attempt_id"]
+    first = stage_start("preparing_habitat_grid", claim["started_at"])
+    fit = stage_start("Fitting response models")
+    fit.update(completed=1, total=6, unit="fits")
+    assert store.heartbeat(identifier, attempt, stage_snapshot([first]))
+    assert (
+        client.get(url).json()["progress"]["description"]
+        == "Reading the analysis area and building the model grid"
+    )
+    assert store.heartbeat(identifier, attempt, stage_snapshot([fit]))
+    fitting = client.get(url).json()["progress"]
+    assert fitting["completed"] == 1
+    assert store.heartbeat(identifier, attempt, {}) and store.heartbeat(
+        identifier, attempt, stage_snapshot([first])
+    )
+    assert client.get(url).json()["progress"] == fitting
+    publishing = stage_start("publishing_outputs")
+    publishing.update(completed=0, total=3, unit="files")
+    assert store.heartbeat(identifier, attempt, stage_snapshot([publishing]))
+    during = client.get(url).json()
+    assert (
+        during["status"] == "running"
+        and during["artifacts"]["availability"] == "pending"
+    )
+    assert during["progress"]["description"] == "Verifying and publishing output files"
+    assert (
+        client.get("/api/processing/model-runs").json()["jobs"][0]["progress"]
+        == during["progress"]
+    )
+    with TestClient(client.app, base_url="https://testserver") as other:
+        assert other.get(url).status_code == 404
+    if outcome == "interrupted":
+        assert store.interrupt_unfinished_jobs_on_restart() == 1
+    else:
+        if outcome == "cancelled":
+            assert client.post(url + "/cancel", headers=HEADERS).status_code == 202
+        assert store.finish(
+            identifier,
+            attempt,
+            None,
+            {"code": "checking_stopped", "detail": "Publication stopped"},
+        )
+    stopped = client.get(url).json()
+    assert stopped["status"] == outcome
+    stages = stopped["progress"]["stages"]
+    assert [stage["phase"] for stage in stages] == [
+        first["phase"],
+        fit["phase"],
+        publishing["phase"],
+    ]
+    assert all(stage["endedAt"] is not None for stage in stages)
+    assert stages[-1]["completed"] == 0
+    assert (
+        stages[-1]["lastProgressAt"]
+        == during["progress"]["stages"][-1]["lastProgressAt"]
+    )
 
 
 @pytest.mark.parametrize("state", ["cancelled", "failed", "interrupted"])

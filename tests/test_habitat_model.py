@@ -499,6 +499,32 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     assert asyncio.run(execute())
     artifact = store.finish.call_args.args[2]
     assert artifact is not None, store.finish.call_args
+    reported = [
+        stage
+        for call in store.heartbeat.call_args_list
+        for stage in call.args[2].get("stages", ())
+    ]
+    phases = list(dict.fromkeys(stage["phase"] for stage in reported))
+    assert phases == [
+        "preparing",
+        "preparing_habitat_grid",
+        "opening_habitat_inputs",
+        "preparing_rasters",
+        "preparing_habitat_references",
+        "Selecting sample pixels",
+        "Reading sample values",
+        "Preparing model samples",
+        "Fitting response models",
+        "Calibrating reference departures",
+        "Predicting raster windows",
+        "finalizing_habitat_outputs",
+        "publishing_outputs",
+    ]
+    fits = [stage for stage in reported if stage["phase"] == "Fitting response models"][
+        -1
+    ]
+    assert fits["completed"] == fits["total"] and fits["unit"] == "fits"
+
     ready = {
         **row,
         "status": "ready",

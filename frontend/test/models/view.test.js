@@ -515,6 +515,24 @@ test("model progress uses the supplied description without reading operation pha
     assert.equal(describeModelProgress(run), "Measuring habitat…");
 });
 
+test("reopening a run shows field-measured stage durations and partial work", () => {
+    const stage = {phase: "fit", description: "Fitting response models", startedAt: "2026-10-08T00:00:00Z",
+        lastProgressAt: "2026-10-08T00:00:03Z", endedAt: "2026-10-08T00:00:04Z", completed: 6, total: 6, unit: "fits"};
+    const verification = {phase: "publish", description: "Verifying and publishing output files", startedAt: stage.endedAt,
+        lastProgressAt: stage.endedAt, endedAt: null};
+    const run = job({status: "running", progress: {phase: "publish", description: verification.description, stages: [stage, verification]}});
+    const h = fixture(); Object.assign(h.state, {page: "run", selectedRun: run.jobId, runs: [run]}); h.view.render(h.state);
+    assert.equal(h.view.run.status.textContent, "Verifying and publishing output files…");
+    assert.equal(h.view.run.stageTimings.hidden, false);
+    assert.match(h.view.run.stageList.children[0].textContent, /Fitting response models.*4 sec.*6 of 6 fits/);
+    assert.match(h.view.run.stageList.children[1].textContent, /Verifying and publishing output files/);
+    run.status = "failed"; verification.endedAt = "2026-10-08T00:00:06Z";
+    h.view.render(h.state); assert.equal(h.view.run.status.textContent, "Failed");
+    assert.match(h.view.run.stageList.children[1].textContent, /2 sec/);
+    verification.endedAt = "2026-10-08T00:00:04.125Z"; h.view.render(h.state);
+    assert.match(h.view.run.stageList.children[1].textContent, /Under 1 sec/);
+});
+
 test("model stages without a description use a running label while lifecycle states take precedence", () => {
     for (const progress of [{phase: "preparing_polygon_mask"}, {phase: "unfamiliar_stage", description: null}, {}]) {
         assert.equal(describeModelProgress(job({status: "running", progress})), "Running tool…");
