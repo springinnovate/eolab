@@ -507,6 +507,25 @@ the whole application as verified because many tests passed.
 
 Keep each approved fix focused. Record unrelated problems separately.
 
+### Reviewing pull requests for regressions
+
+Use P2 or higher as the default severity threshold for a correctness review.
+Honor a different threshold when the requester specifies one. Report every
+supported finding that meets the threshold, with no target or cap on the
+count. Zero findings is a valid result. Start by listing the user-visible
+guarantees affected by the diff. Finish when each has been checked or
+marked unverified with a reason.
+
+Try to disprove each suspected regression. Where feasible, run the smallest
+triggering case on both the base and head commits. For each finding, identify
+the changed code, the trigger, the expected and actual behavior, and the
+impact that warrants its severity. Say which results you observed and which
+conclusions you inferred from the code.
+
+Group symptoms that the same correction addresses and keep each scenario as
+a regression case. When proposing separate fixes, explain what would still
+fail after applying just one of them.
+
 ## Verification
 
 - Add tests at the component that owns the behavior.
