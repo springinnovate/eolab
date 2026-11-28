@@ -42,7 +42,7 @@ from eolab_app.processing import model_operations
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import (
     RetainedVectorSelectionReader,
-    write_captured_vector_inputs,
+    write_captured_vector_input,
 )
 from eolab_app.source_files import finish_source_task
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
@@ -378,6 +378,21 @@ class ProcessingWorker:
         row.update(saved)
         return authorized, checksum
 
+    def _materialize_input(self, job_id: str, attempt: str, input_id: str, path: Path) -> None:
+        """Read and write one input so its decoded geometry is released before the next read.
+
+        Args:
+            job_id: Claimed computation ID.
+            attempt: Token authorizing the private input read.
+            input_id: Retained drawing or boundary.
+            path: Destination GeoPackage inside the attempt directory.
+
+        Raises:
+            ProcessingError: The attempt no longer owns the input.
+            OSError: The scratch file cannot be written.
+        """
+        write_captured_vector_input(path, self.jobs.read_job_input(job_id, attempt, input_id))
+
     async def _execute(self, row: dict[str, Any]) -> Artifact:
         """Authorize the inputs, reuse or calculate values, and publish result files.
 
@@ -420,23 +435,18 @@ class ProcessingWorker:
             model.calculation if model else row["spec"]
         )
         directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
-        if row.get("input_ids"):
-            reading = asyncio.create_task(
-                asyncio.to_thread(self.jobs.read_job_inputs, row["id"], row["attempt_id"])
-            )
+        captured_files = {}
+        for index, input_id in enumerate(row.get("input_ids", ())):
+            path = directory / f"input-vector-{index}.gpkg"
+            writing = asyncio.create_task(asyncio.to_thread(
+                self._materialize_input, row["id"], row["attempt_id"], input_id, path
+            ))
             try:
-                collections = await asyncio.shield(reading)
-            finally:
-                await finish_source_task(reading)
-            del reading
-            writing = asyncio.create_task(
-                asyncio.to_thread(write_captured_vector_inputs, directory, collections)
-            )
-            try:
-                row["captured_vector_files"] = await asyncio.shield(writing)
+                await asyncio.shield(writing)
             finally:
                 await finish_source_task(writing)
-            del collections
+            captured_files[input_id] = path
+        row["captured_vector_files"] = captured_files
         authorized = None
         checksum = None
         if isinstance(calculation, handler.queued_type):

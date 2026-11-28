@@ -177,17 +177,18 @@ class JobStore(Protocol):
         """
         ...
 
-    def read_job_inputs(
-        self, identifier: str, attempt: str
-    ) -> dict[str, dict[str, Any]]:
-        """Read the private JSON documents held by this running attempt.
+    def read_job_input(
+        self, identifier: str, attempt: str, input_id: str
+    ) -> dict[str, Any]:
+        """Read one private source document held by this running attempt.
 
         Args:
             identifier: Claimed computation ID.
             attempt: Current worker attempt token.
+            input_id: Identifier of the selected input.
 
         Returns:
-            Immutable documents indexed by original input ID.
+            The decoded source document.
 
         Raises:
             ProcessingError: If the worker no longer owns these inputs.

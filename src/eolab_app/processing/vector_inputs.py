@@ -26,55 +26,44 @@ from eolab_app.polygon_areas import PolygonAreaReference, SummaryPolygon
 from eolab_app.feature_intersection import bind_intersections
 
 
-def write_captured_vector_inputs(
-    directory: Path, collections: Mapping[str, dict[str, Any]]
-) -> dict[str, Path]:
-    """Write each retained drawing layer or polygon boundary to a private WGS84 GeoPackage.
+def write_captured_vector_input(path: Path, collection: dict[str, Any]) -> None:
+    """Write one retained drawing or polygon boundary to the attempt's WGS84 GeoPackage.
 
     Args:
-        directory: Private attempt directory, cleaned after cancellation or publication.
-        collections: Authorized feature collections or polygon lists keyed by input ID.
-
-    Returns:
-        Original reference keys mapped to files available for the duration of this attempt.
+        path: Output file assigned by the worker.
+        collection: Original features and attributes or selected boundary polygons.
 
     Raises:
-        OSError: If the attempt cannot write its scratch dataset.
-        fiona.errors.FionaError: If the native writer fails.
+        OSError: The attempt cannot write its scratch file.
+        fiona.errors.FionaError: The native writer failed.
     """
-
-    paths = {}
-    for index, (key, collection) in enumerate(collections.items()):
-        path = directory / f"input-vector-{index}.gpkg"
-        if "features" in collection:
-            fields = {"name": "str", "note": "str", "featureId": "str"}
-            records = (
-                {
-                    "geometry": feature["geometry"],
-                    "properties": {**feature["properties"], "featureId": feature["id"]},
-                }
-                for feature in collection["features"]
-            )
-        else:
-            fields = {}
-            records = (
-                {"geometry": polygon, "properties": {}}
-                for polygon in collection["polygons"]
-            )
-        with fiona.open(
-            path,
-            "w",
-            driver="GPKG",
-            layer="features",
-            crs="EPSG:4326",
-            schema={
-                "geometry": "Polygon",
-                "properties": fields,
-            },
-        ) as dataset:
-            dataset.writerecords(records)
-        paths[key] = path
-    return paths
+    if "features" in collection:
+        fields = {"name": "str", "note": "str", "featureId": "str"}
+        records = (
+            {
+                "geometry": feature["geometry"],
+                "properties": {**feature["properties"], "featureId": feature["id"]},
+            }
+            for feature in collection["features"]
+        )
+    else:
+        fields = {}
+        records = (
+            {"geometry": polygon, "properties": {}}
+            for polygon in collection["polygons"]
+        )
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="features",
+        crs="EPSG:4326",
+        schema={
+            "geometry": "Polygon",
+            "properties": fields,
+        },
+    ) as dataset:
+        dataset.writerecords(records)
 
 
 class RetainedVectorSelectionReader:

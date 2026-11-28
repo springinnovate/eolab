@@ -1334,34 +1334,31 @@ class PostgresJobStore:
         )
         return {**job, "input_ids": [row["input_id"] for row in cursor]}
 
-    def read_job_inputs(
-        self, identifier: str, attempt: str
-    ) -> dict[str, dict[str, Any]]:
-        """Load this worker's private input documents without holding the queue lock.
+    def read_job_input(self, identifier: str, attempt: str, input_id: str) -> dict[str, Any]:
+        """Read one retained input for the running attempt without holding the queue lock.
 
         Args:
-            identifier: Claimed computation ID, independent of its public subscribers.
-            attempt: Current worker attempt's fencing token.
+            identifier: Claimed computation ID.
+            attempt: Current worker attempt token.
+            input_id: Retained input to materialize next.
 
         Returns:
-            Immutable JSON payloads keyed by original input ID.
+            The decoded source document.
 
         Raises:
-            ProcessingError: If this attempt no longer owns the retained inputs.
+            ProcessingError: The attempt stopped or does not own this input.
         """
         with self._transaction() as cursor:
             cursor.execute(
-                "SELECT i.id,i.payload FROM processing.jobs j "
-                "JOIN processing.job_inputs r ON r.job_id=j.id JOIN processing.inputs i ON i.id=r.input_id "
-                "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running'",
-                (identifier, attempt),
+                "SELECT i.payload FROM processing.jobs j JOIN processing.job_inputs r ON r.job_id=j.id "
+                "JOIN processing.inputs i ON i.id=r.input_id "
+                "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running' AND r.input_id=%s",
+                (identifier, attempt, input_id),
             )
-            rows = cursor.fetchall()
-        if not rows:
-            raise ProcessingError(
-                "job_cancelled", "Calculation stopped before reading its inputs.", 409
-            )
-        return {row["id"]: row["payload"] for row in rows}
+            row = cursor.fetchone()
+        if row is None:
+            raise ProcessingError("job_cancelled", "Calculation stopped before reading its input.", 409)
+        return row["payload"]
 
     def recover_unstarted_claim(self, attempt_id: str) -> dict[str, Any] | None:
         """Recover a claim whose reply was lost before this lane launched native work.

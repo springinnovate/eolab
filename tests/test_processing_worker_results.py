@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 import weakref
 
+import fiona
 import numpy as np
 import pytest
 import rasterio
@@ -49,24 +50,35 @@ def test_real_plan_worker_and_public_result(
         "read",
         Mock(side_effect=AssertionError("Catalog files are immutable")),
     )
-    class InputDocuments(dict[str, dict[str, Any]]):
-        """Decoded source documents whose lifetime can be observed without retaining them."""
+    class InputDocument(dict[str, Any]):
+        """One decoded source whose lifetime can be observed without retaining it."""
 
-    loaded: list[weakref.ReferenceType[InputDocuments]] = []
+    loaded: list[weakref.ReferenceType[InputDocument]] = []
 
-    def read_documents(job_id: str, attempt_id: str) -> InputDocuments:
+    def read_document(job_id: str, attempt_id: str, input_id: str) -> InputDocument:
         """Return the claimed job's private source and record a weak reference to it.
 
         Args:
             job_id: Claimed fixture job used as the source key.
             attempt_id: Worker attempt reading the source.
+            input_id: Retained source being materialized.
 
         Returns:
             Drawing documents owned by the worker until it writes its GeoPackage.
         """
-        documents = InputDocuments({job_id: {"features": []}})
-        loaded.append(weakref.ref(documents))
-        return documents
+        document = InputDocument(features=[])
+        loaded.append(weakref.ref(document))
+        return document
+
+    native_open = fiona.open
+    prior_sources_alive = []
+    def check_release(path: Path, *args: Any, **kwargs: Any) -> fiona.Collection:
+        """Open the actual GeoPackage after checking the preceding source was released."""
+        if Path(path).name == "input-vector-1.gpkg":
+            prior_sources_alive.append(loaded[0]() is not None)
+        return native_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(fiona, "open", check_release)
 
     def authorize_after_capture(source: Any) -> SimpleNamespace:
         """Return the fixture raster once the decoded vector inputs have been released.
@@ -77,12 +89,12 @@ def test_real_plan_worker_and_public_result(
         Returns:
             The authorized raster with its original path and signature.
         """
-        assert loaded and loaded[0]() is None
+        assert len(loaded) == 2 and all(reference() is None for reference in loaded)
         return authorized
 
     authorizer = SimpleNamespace(authorize=AsyncMock(side_effect=authorize_after_capture))
     store = Mock()
-    store.read_job_inputs.side_effect = read_documents
+    store.read_job_input.side_effect = read_document
     store.get_cached_calculation_results.return_value = {}
     identifier = "a" * 32
     limits = RasterClipLimits()
@@ -100,7 +112,7 @@ def test_real_plan_worker_and_public_result(
     row = {
         "id": identifier,
         "input_uploads": {},
-        "input_ids": [identifier],
+        "input_ids": ["first", "second"],
         "attempt_id": "b" * 32,
         "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,
@@ -118,6 +130,7 @@ def test_real_plan_worker_and_public_result(
     store.finish.return_value = True
     worker = ProcessingWorker(authorizer, store, artifacts, limits)
     assert asyncio.run(worker.run_once())
+    assert prior_sources_alive == [False], "The preceding layer is still in memory"
     prepared = AggregateSpec.model_validate(row["spec"])
     assert operation.parse_specification(prepared) is prepared
     authorizer.authorize.assert_awaited_once_with(request.sources["a"])
@@ -149,9 +162,9 @@ def test_worker_waits_for_input_read_on_cancellation(tmp_path: Path) -> None:
         """Hold the input read until the test lets the worker release its slot."""
         entered.set()
         assert release.wait(10)
-        return {"source": {"features": []}}
+        return {"features": []}
 
-    store.read_job_inputs.side_effect = read_input
+    store.read_job_input.side_effect = read_input
     artifacts = LocalJobArtifacts(tmp_path)
     artifacts.initialize()
     worker = ProcessingWorker(Mock(), store, artifacts, RasterClipLimits())
