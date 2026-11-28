@@ -812,6 +812,38 @@ class PostgresJobStore:
             )
             return cursor.fetchone()
 
+    def recent_model_stage_timings(
+        self, owner: str, operation: str, definition_sha256: str, build: str
+    ) -> list[dict[str, Any]]:
+        """Read timing observations from comparable completed jobs owned by this session.
+
+        Args:
+            owner: Processing session hash authorizing the history read.
+            operation: Model calculation operation.
+            definition_sha256: Digest of the selected recipe.
+            build: Deployment revision that will run the calculation.
+
+        Returns:
+            Newest-first workload, grid and stage records from recent ready jobs.
+            Results exclude input geometries, file paths and previous forecasts.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                """
+                SELECT j.summary->'timingWork' AS work, j.summary->'grid' AS grid,
+                       j.progress->'stages' AS stages
+                FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id
+                WHERE s.owner=%s AND s.status IS NULL AND j.status='ready' AND j.expires_at>now()
+                  AND j.summary->>'operationId'=%s
+                  AND j.summary->'model'->>'definitionSha256'=%s
+                  AND j.spec->>'applicationBuild'=%s
+                  AND j.summary ? 'timingWork' AND j.progress ? 'stages'
+                ORDER BY s.created_at DESC LIMIT 32
+                """,
+                (owner, operation, definition_sha256, build),
+            )
+            return cursor.fetchall()
+
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:

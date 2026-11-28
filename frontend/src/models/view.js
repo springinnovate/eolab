@@ -2,7 +2,7 @@
 import { ToolTabStrip } from "../tool-tab-strip.js";
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { describeModelProgress } from "../processing/presentation.js";
+import { describeCompletionEstimate, describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, captureModelRaster, selectedDrawnPolygonLayer, isModelSpatialInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
@@ -565,6 +565,7 @@ export class ModelsView {
             if (event.key === "Escape" && !this.state.actionBusy) { event.preventDefault(); event.stopPropagation(); this.closeRunNameEditor(); }
         });
         const status = this.element("p"); status.setAttribute("role", "status");
+        const estimate = this.element("p", "", "models-help");
         const progress = this.element("progress"); progress.setAttribute("aria-label", "Current run stage progress");
         const stageTimings = this.element("details", "", "models-details"), stageList = this.element("ol");
         stageTimings.append(this.element("summary", "Stage timings"), stageList);
@@ -594,9 +595,9 @@ export class ModelsView {
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, stageTimings, error, result, actions, deletion, feedback, expiry, inputs, details.root);
+        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, estimate, stageTimings, error, result, actions, deletion, feedback, expiry, inputs, details.root);
         this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, editingName: false,
-            status, progress, stageTimings, stageList, error, result, cancel, duplicate, renew, deletion, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
+            status, progress, estimate, stageTimings, stageList, error, result, cancel, duplicate, renew, deletion, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
     /** Open the selected run's name while keeping its creation timestamp fixed.
@@ -650,6 +651,8 @@ export class ModelsView {
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
         r.duplicate.hidden = Boolean(state.duplicateRestricted);
         r.duplicate.disabled = !state.invocation || r.duplicate.hidden || Boolean(state.loading || state.libraryError || state.actionBusy);
+        r.estimate.textContent = job ? describeCompletionEstimate(job, Date.now()) : "";
+        r.estimate.hidden = !r.estimate.textContent;
         r.progress.hidden = job?.status !== "running";
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");

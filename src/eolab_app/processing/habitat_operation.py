@@ -12,6 +12,7 @@ from eolab_app.processing.habitat_calculation import (
     HabitatSources,
     habitat_process_target,
 )
+from eolab_app.processing.habitat_runtime import describe_habitat_workload
 from eolab_app.processing.habitat_models import (
     OPERATION,
     HabitatCalculationInputs,
@@ -35,8 +36,8 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 async def validate_habitat_submission(
     request: HabitatRequest, dependencies: object | None
-) -> None:
-    """Check Habitat's prepared-input policy before an ordinary model run is queued.
+) -> dict[str, Any]:
+    """Check prepared-input eligibility and describe the admitted calculation workload.
 
     Args:
         request: Validated Habitat calculation inputs from the model binder.
@@ -44,14 +45,18 @@ async def validate_habitat_submission(
             or None when the operation is not configured. Manual raster inputs do
             not require preparation dependencies.
 
+    Returns:
+        Counts for comparing the requested work with completed runs.
+
     Raises:
         ProcessingError: If Earth Engine inputs lack an authorized prepared Catalog
             selection, have no cached coverage, or cannot be inspected.
         asyncio.CancelledError: After the native coverage reader has stopped.
     """
-    await validate_habitat_preparation_selection(
+    coverage = await validate_habitat_preparation_selection(
         request, cast(HabitatSubmissionDependencies | None, dependencies)
     )
+    return describe_habitat_workload(request, coverage)
 
 
 def bind_habitat(

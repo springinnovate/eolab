@@ -112,6 +112,18 @@ test("model results use the existing numeric-row and download safety validation"
     await assert.rejects(h.api.getJob(job().jobId), /download address/);
 });
 
+test("whole-run completion estimates contain a complete ordered range or explicit uncertainty", async () => {
+    for (const estimate of [{lowerSeconds: null, upperSeconds: null}, {lowerSeconds: 1, upperSeconds: 73}]) {
+        const h = fixture(() => job({completionEstimate: estimate}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).completionEstimate, estimate);
+    }
+    for (const estimate of [{}, 18, {lowerSeconds: -1, upperSeconds: 2}, {lowerSeconds: 4, upperSeconds: 3},
+        {lowerSeconds: 3, upperSeconds: null}, {lowerSeconds: null, upperSeconds: 4}]) {
+        const h = fixture(() => job({completionEstimate: estimate}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid model completion estimate/);
+    }
+});
+
 test("malformed model definitions and inconsistent progress are rejected", async () => {
     const h = fixture(() => ({models: [{...model, id: "../other"}]}));
     await assert.rejects(h.api.discoverModels(), /model identity/);
