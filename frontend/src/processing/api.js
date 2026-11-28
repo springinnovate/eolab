@@ -115,6 +115,26 @@ function validateExecution(execution) {
     }
 }
 
+/** Accept an optional operation-owned plain-text stage label from a status response.
+ * @param {unknown} description Candidate label.
+ * @return {boolean} Whether the label meets the public length and text contract.
+ */
+function validStageDescription(description) {
+    return description == null || typeof description === "string" && Boolean(description.trim()) && [...description].length <= 200;
+}
+
+/** Validate the measured timestamps, counts and human-readable text of a recorded stage.
+ * @param {Object} stage Stage received from a Processing job snapshot.
+ * @return {boolean} Whether it can be presented as an ordered timing record.
+ */
+function validTimedStage(stage) {
+    if (!stage || typeof stage.phase !== "string" || !stage.phase || !validStageDescription(stage.description)) return false;
+    const start = Date.parse(stage.startedAt), last = Date.parse(stage.lastProgressAt);
+    return Number.isFinite(start) && last >= start && (stage.endedAt == null || Date.parse(stage.endedAt) >= last) &&
+        (stage.completed == null && stage.total == null || Number.isSafeInteger(stage.completed) && Number.isSafeInteger(stage.total) &&
+            stage.completed >= 0 && stage.completed <= stage.total && typeof stage.unit === "string" && stage.unit.length > 0);
+}
+
 /** Check a job's status, progress, results and download links before displaying it.
  * Model stage descriptions are optional literal text: when present, they must
  * contain non-whitespace text and at most 200 Unicode code points.
@@ -128,8 +148,9 @@ function validateJob(job) {
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.operation === "model.run.v1") {
         validateModelIdentity(job.model);
-        const description = job.progress.description;
-        if (description != null && (typeof description !== "string" || !description.trim() || [...description].length > 200))
+        if (job.progress.stages !== undefined && (!Array.isArray(job.progress.stages) || !job.progress.stages.every(validTimedStage)))
+            throw new Error("Processing returned invalid model stage timings.");
+        if (!validStageDescription(job.progress.description))
             throw new Error("Processing returned an invalid model progress description.");
         if (typeof job.name !== "string" || !job.name.trim() || [...job.name].length > 80 ||
             typeof job.nameTimestamp !== "string" || !/^\d{4}(?:_\d{2}){5}$/.test(job.nameTimestamp) ||
@@ -138,6 +159,14 @@ function validateJob(job) {
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
+        const estimate = job.completionEstimate;
+        if (estimate != null) {
+            const {lowerSeconds, upperSeconds} = estimate;
+            if (!(lowerSeconds === null && upperSeconds === null) &&
+                !(Number.isSafeInteger(lowerSeconds) && Number.isSafeInteger(upperSeconds) &&
+                    lowerSeconds >= 0 && upperSeconds >= 1 && lowerSeconds <= upperSeconds))
+                throw new Error("Processing returned an invalid model completion estimate.");
+        }
         validateModelArtifacts(job.artifacts, job);
         if (job.deletionUndo != null) {
             validateProcessingId(job.deletionUndo.deletionId);

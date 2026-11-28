@@ -93,6 +93,7 @@ from eolab_app.processing.model_runs import (
     export_model_job_yaml,
     read_model_invocation,
     serialize_model_job,
+    compact_model_timings,
     serialize_model_artifacts,
     build_model_download_filename,
     build_model_calculation_request,
@@ -836,8 +837,9 @@ class ProcessingService:
             request.model_copy(update={"inputs": inputs}), self.model_registry
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
+        timing_work = None
         if operation.before_queue is not None:
-            await operation.before_queue(
+            timing_work = await operation.before_queue(
                 calculation, self.operation_submission_dependencies.get(operation.id)
             )
         source = operation.source(calculation) if operation.source is not None else None
@@ -895,6 +897,22 @@ class ProcessingService:
             source_metadata,
             additional_sources,
         )
+        if timing_work is not None:
+            records = await asyncio.to_thread(
+                self.jobs.recent_model_stage_timings,
+                owner,
+                operation.id,
+                invocation.model.definitionSha256,
+                prepared.specification["applicationBuild"],
+            )
+            prepared = replace(
+                prepared,
+                summary={
+                    **prepared.summary,
+                    "timingWork": timing_work,
+                    "timingHistory": compact_model_timings(records),
+                },
+            )
         prepared = replace(
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
         )

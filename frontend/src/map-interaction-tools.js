@@ -1,5 +1,7 @@
 /** Present mutually exclusive map modes and capture a transient freehand selection. */
 
+import { findLassoLoop, lassoEnclosesArea } from './lasso-geometry.js';
+
 /** @typedef {"pan"|"pixel"|"box"|"lasso"} MapMode */
 /** @typedef {{rasterValues:boolean,featurePicking:boolean,histogramBox:boolean}} MapPointerActions */
 /** @typedef {MapPointerActions & {lasso:boolean}} MapToolAvailability */
@@ -143,7 +145,7 @@ export class MapInteractionTools {
             this.dragWasEnabled = null;
         }
         this.status.textContent = mode === 'lasso' ? this.selectionMessage || (this.layerSelect.value
-            ? 'Drag around features; release to select. Esc cancels.' : 'Add a vector layer to the map to use Lasso.') :
+            ? 'Drag around features. Cross your line or release to select. Esc cancels.' : 'Add a vector layer to the map to use Lasso.') :
             mode === 'box' ? 'Click the map to place a histogram box.' : 'Drag to move the map.';
         if (mode === 'pixel') {
             this.status.textContent = [
@@ -184,7 +186,7 @@ export class MapInteractionTools {
         const signature = target ? JSON.stringify([target.key, target.selection]) : null;
         if (this.targetSignature !== signature) {
             this.#cancelLassoWork();
-            if (this.mode === 'lasso') this.status.textContent = target ? 'Drag around features; release to select. Esc cancels.' : 'Add a vector layer to the map to use Lasso.';
+            if (this.mode === 'lasso') this.status.textContent = target ? 'Drag around features. Cross your line or release to select. Esc cancels.' : 'Add a vector layer to the map to use Lasso.';
         }
         this.targetSignature = signature;
     }
@@ -203,27 +205,32 @@ export class MapInteractionTools {
         this.#cancelLassoWork();
         this.container.setPointerCapture(event.pointerId);
         const preview = this.leaflet.polygon([], {color:this.color, weight:2, dashArray:'6 4', fillOpacity:0.2, interactive:false}).addTo(this.map);
-        this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), screen:null, preview};
-        this.status.textContent = 'Drawing lasso… Release to select; Esc cancels.';
+        this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), preview};
+        this.status.textContent = 'Drawing lasso… Cross your line or release to select. Esc cancels.';
         this.moveStroke(event);
     }
 
-    /** Add geographic positions only after a few screen pixels of pointer movement.
+    /** Finish a loop on first contact or extend the shaded preview after three pixels.
      * @param {PointerEvent} event Captured pointer movement.
      * @return {void}
      */
     moveStroke(event) {
         if (!this.stroke || this.stroke.pointer !== event.pointerId) return;
         event.preventDefault(); event.stopImmediatePropagation();
-        const last = this.stroke.screen;
-        if (last && Math.hypot(event.clientX-last[0], event.clientY-last[1]) < 3) return;
-        if (this.stroke.points.length >= 2000) {
+        const points = this.stroke.points;
+        const next = this.map.mouseEventToContainerPoint(event);
+        const loop = findLassoLoop(points, next);
+        if (loop) {
+            this.#completeStroke(loop);
+            return;
+        }
+        const last = points.at(-1);
+        if (last && Math.hypot(next.x - last.x, next.y - last.y) < 3) return;
+        if (points.length >= 2000) {
             this.cancelStroke(); this.status.textContent = 'The outline is too long. Draw a shorter lasso.'; return;
         }
-        const position = this.map.mouseEventToLatLng(event);
-        this.stroke.points.push([position.lng, position.lat]);
-        this.stroke.screen = [event.clientX,event.clientY];
-        this.stroke.preview.setLatLngs(this.stroke.points.map(([lng,lat])=>[lat,lng]));
+        points.push(next);
+        this.stroke.preview.addLatLng(this.map.containerPointToLatLng(next));
     }
 
     /** Close the captured polygon and begin exact selection against its captured view.
@@ -233,14 +240,25 @@ export class MapInteractionTools {
     finishStroke(event) {
         if (!this.stroke || this.stroke.pointer !== event.pointerId) return;
         this.moveStroke(event);
-        if (!this.stroke) return;
-        const {points,target} = this.stroke;
+        if (this.stroke) this.#completeStroke(this.stroke.points);
+    }
+
+    /** Release the captured pointer and select the area enclosed by these map pixels.
+     * @param {import('./lasso-geometry.js').MapPixel[]} points Vertices from the contact or the full open stroke.
+     * @return {void}
+     */
+    #completeStroke(points) {
+        const {target} = this.stroke;
         this.cancelStroke();
-        if (points.length < 3) { this.status.textContent = 'Drag around an area to select features.'; return; }
-        if (points.some(([lng,lat])=>Math.abs(lng)>180 || Math.abs(lat)>85.05112878)) {
+        if (!lassoEnclosesArea(points)) { this.status.textContent = 'Drag around an area to select features.'; return; }
+        const coordinates = points.map(point => {
+            const {lng, lat} = this.map.containerPointToLatLng(point);
+            return [lng, lat];
+        });
+        if (coordinates.some(([lng,lat])=>Math.abs(lng)>180 || Math.abs(lat)>85.05112878)) {
             this.status.textContent = 'Draw within the map without crossing the date line.'; return;
         }
-        const ring = [...points, points[0]];
+        const ring = [...coordinates, coordinates[0]];
         const polygon = {type:'Polygon', coordinates:[ring]};
         void this.select(target, polygon);
     }
@@ -325,7 +343,8 @@ export class MapInteractionTools {
         }).addTo(this.map);
         this.selectionMessage = `${display.count.toLocaleString()} ${display.count===1?'feature':'features'} selected in ${display.label}.` +
             (display.count > 0 ? ' Open Features to inspect or plot them.' : ' Draw another area to select features.') +
-            (display.count > 0 && display.geometry === null ? ' Map highlights are unavailable.' : '');
+            (display.count > 0 && display.geometry === null ? ' Map highlights are unavailable.' : '') +
+            (display.geometry?.simplified ? ' Map highlights show simplified shapes or points.' : '');
         if (this.mode === 'lasso' && !this.stroke) this.status.textContent = this.selectionMessage;
     }
 

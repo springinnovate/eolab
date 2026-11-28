@@ -52,6 +52,43 @@ export function describeModelProgress(job) {
     return job.progress.total > 0 ? `${description} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${description}…`;
 }
 
+/** Format a time interval outward in a unit that matches its uncertainty.
+ * @param {number} lowerSeconds Earliest time in the estimated range.
+ * @param {number} upperSeconds Latest time in the estimated range.
+ * @returns {string} Approximate range in seconds, minutes, or hours.
+ */
+function durationRange(lowerSeconds, upperSeconds) {
+    const unit = lowerSeconds >= 3600 ? 3600 : lowerSeconds >= 60 ? 60 : 1;
+    const lo = Math.floor(lowerSeconds / unit), hi = Math.ceil(upperSeconds / unit);
+    const name = unit === 3600 ? "hour" : unit === 60 ? "minute" : "second";
+    return `${lo === hi ? lo : `${lo}–${hi}`} ${name}${hi === 1 ? "" : "s"}`;
+}
+
+/** Describe queue or calculation time and the forecast through verified results.
+ * @param {Object} job Owned status snapshot with an optional completion range.
+ * @param {number} now Browser clock in epoch milliseconds.
+ * @returns {string} Elapsed time and a whole-run estimate, or empty for other jobs.
+ */
+export function describeCompletionEstimate(job, now) {
+    const estimate = job.completionEstimate;
+    if (!estimate || !["queued", "running"].includes(job.status)) return "";
+    const queued = job.status === "queued";
+    const since = queued ? job.createdAt : job.progress.stages?.[0]?.startedAt;
+    const elapsed = Math.max(0, Math.floor((now - Date.parse(since)) / 1000));
+    const duration = elapsed >= 60 ? `${Math.floor(elapsed / 60)} min ${elapsed % 60} sec` : `${elapsed} sec`;
+    const observed = Number.isFinite(elapsed) ? `${queued ? "In queue" : "Elapsed"} ${duration}. ` : "";
+    if (estimate.lowerSeconds === null) return observed + (queued
+        ? "Estimating run time after it starts…" : "Estimating time until results are ready…");
+    const range = durationRange(estimate.lowerSeconds, estimate.upperSeconds);
+    if (estimate.lowerSeconds === 0) {
+        const maximum = durationRange(estimate.upperSeconds, estimate.upperSeconds);
+        return observed + (queued ? `Once started, results are expected within ${maximum}.`
+            : `Results are expected within ${maximum}.`);
+    }
+    return observed + (queued ? `Once started, about ${range} until results are ready.`
+        : `About ${range} until results are ready.`);
+}
+
 /** Describe a job's lifecycle and measured progress using its operation's response format.
  * @param {Object} job Validated Processing job snapshot, including its operation and progress.
  * @return {string} User-facing status or stage with measured work, without invented percentages.

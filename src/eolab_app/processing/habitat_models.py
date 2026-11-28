@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 
 from eolab_app.catalog_selection import ModelVectorSelection
@@ -137,6 +137,22 @@ class HabitatEarthEngineStack(HabitatSchema):
         default_factory=tuple
     )
 
+    _selected_band_counts: dict[str, int] = PrivateAttr(default_factory=dict)
+    _tile_pixels: int = PrivateAttr()
+
+    def selected_grid_work(self) -> tuple[int, int, int]:
+        """Return the accepted predictor and response counts and pixels per prepared tile.
+
+        Returns:
+            Counts from validation of this selection against its installed scientific
+            configuration. These measurements are private and need no second file read.
+        """
+        return (
+            self._selected_band_counts["predictor"],
+            self._selected_band_counts["response"],
+            self._tile_pixels,
+        )
+
     @model_validator(mode="after")
     def check_dataset_selection(self) -> Self:
         """Admit known role-specific datasets and expand omitted choices to all.
@@ -150,6 +166,7 @@ class HabitatEarthEngineStack(HabitatSchema):
         """
         configuration = load_habitat_stack(self.year)
         roles = get_habitat_dataset_roles(configuration)
+        self._tile_pixels = configuration.grid.tile_size_pixels**2
         for field_name, role in (
             ("predictorDatasets", "predictor"),
             ("responseDatasets", "response"),
@@ -164,13 +181,15 @@ class HabitatEarthEngineStack(HabitatSchema):
                 raise ValueError("Choose each dataset only once within a model role.")
             if set(selected) - set(available):
                 raise ValueError(f"Choose configured {role} datasets.")
-            if not any(
+            band_count = sum(
                 band.role == role and set(band.source_dataset_keys).issubset(selected)
                 for band in configuration.bands
-            ):
+            )
+            if not band_count:
                 raise ValueError(
                     f"Choose datasets that supply at least one {role} band."
                 )
+            self._selected_band_counts[role] = band_count
             object.__setattr__(
                 self, field_name, tuple(key for key in available if key in selected)
             )

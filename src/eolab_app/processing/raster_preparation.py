@@ -1,6 +1,6 @@
 """Prepare temporary rasters on one common grid for a Processing calculation."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from math import ceil, floor, isclose, isfinite, radians, tau
@@ -526,6 +526,7 @@ def prepare_raster_stack(
     limits: RasterAggregateLimits,
     *,
     all_touched: bool,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Iterator[dict[str, Path]]:
     """Warp named inputs to temporary, AOI-masked GeoTIFFs on one shared grid.
 
@@ -546,6 +547,7 @@ def prepare_raster_stack(
         directory: Existing private attempt directory outside source mounts.
         limits: Existing Processing settings passed to polygon preparation.
         all_touched: Caller-selected polygon inclusion rule, applied to all inputs.
+        on_progress: Optional recipient for completed and total alignment blocks.
 
     Yields:
         Prepared files keyed by the original names, valid inside this context.
@@ -561,7 +563,12 @@ def prepare_raster_stack(
     total = len(inputs) * ceil(grid.width / tile_side) * ceil(grid.height / tile_side)
     completed = 0
     last_progress = 0.0
-    write_progress(directory, "preparing_rasters", 0, total)
+    report = on_progress or (
+        lambda count, workload: write_progress(
+            directory, "preparing_rasters", count, workload
+        )
+    )
+    report(0, total)
     with (
         TemporaryDirectory(prefix="aligned-", dir=directory) as temporary,
         ExitStack() as resources,
@@ -620,13 +627,8 @@ def prepare_raster_stack(
                         )
                         completed += 1
                         if time.monotonic() - last_progress > 0.5:
-                            write_progress(
-                                directory,
-                                "preparing_rasters",
-                                completed,
-                                total,
-                            )
+                            report(completed, total)
                             last_progress = time.monotonic()
             outputs[name] = output
-        write_progress(directory, "preparing_rasters", completed, total)
+        report(completed, total)
         yield outputs

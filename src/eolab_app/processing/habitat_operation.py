@@ -5,12 +5,14 @@ from typing import Any, Callable, cast
 
 from eolab_app.bounded_vector import summary_process
 from eolab_app.catalog_selection import ModelVectorSelection
+from eolab_app.processing.stage_progress import stage_snapshot, stage_start
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.habitat_calculation import (
     HabitatSources,
     habitat_process_target,
 )
+from eolab_app.processing.habitat_runtime import describe_habitat_workload
 from eolab_app.processing.habitat_models import (
     OPERATION,
     HabitatCalculationInputs,
@@ -25,6 +27,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
     validate_habitat_preparation_selection,
 )
+from eolab_app.processing.habitat_raster_cache import manual_band_cache_directory
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
@@ -34,8 +37,8 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 async def validate_habitat_submission(
     request: HabitatRequest, dependencies: object | None
-) -> None:
-    """Check Habitat's prepared-input policy before an ordinary model run is queued.
+) -> dict[str, Any]:
+    """Check prepared-input eligibility and describe the admitted calculation workload.
 
     Args:
         request: Validated Habitat calculation inputs from the model binder.
@@ -43,14 +46,18 @@ async def validate_habitat_submission(
             or None when the operation is not configured. Manual raster inputs do
             not require preparation dependencies.
 
+    Returns:
+        Counts for comparing the requested work with completed runs.
+
     Raises:
         ProcessingError: If Earth Engine inputs lack an authorized prepared Catalog
             selection, have no cached coverage, or cannot be inspected.
         asyncio.CancelledError: After the native coverage reader has stopped.
     """
-    await validate_habitat_preparation_selection(
+    coverage = await validate_habitat_preparation_selection(
         request, cast(HabitatSubmissionDependencies | None, dependencies)
     )
+    return describe_habitat_workload(request, coverage)
 
 
 def bind_habitat(
@@ -224,6 +231,9 @@ async def prepare_habitat(
             be calculated.
         SelectionUnavailableError: If a selected vector is unavailable.
     """
+    await context.report_progress(
+        stage_snapshot([stage_start("preparing_habitat_grid")])
+    )
     request = queued.request
     sources = await resolve_habitat_sources(context, request)
     if queued.polygonArea is not None:
@@ -285,8 +295,8 @@ async def prepare_habitat_execution(
         SelectionUnavailableError: If a selected vector cannot be read.
     """
     sources = await resolve_habitat_sources(context, spec.inputs)
+    cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
     if isinstance(spec.inputs.stack, HabitatEarthEngineStack):
-        cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
         if cache_directory is None:
             raise ProcessingError(
                 "habitat_cache_unavailable",
@@ -295,6 +305,19 @@ async def prepare_habitat_execution(
                 503,
             )
         sources = HabitatSources(sources.rasters, sources.vectors, cache_directory)
+    elif cache_directory is not None:
+        root = cache_directory.parent / "habitat-aligned"
+        scopes = {}
+        for name, reference in spec.inputs.get_raster_sources().items():
+            if name.startswith(("predictor_", "response_")):
+                scope = manual_band_cache_directory(
+                    root, reference, context.rasters[name]
+                )
+                if scope is not None:
+                    scopes[name] = scope
+        sources = HabitatSources(
+            sources.rasters, sources.vectors, band_cache_directories=scopes
+        )
     return sources, spec
 
 

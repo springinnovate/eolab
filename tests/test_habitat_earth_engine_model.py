@@ -35,9 +35,11 @@ from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineSettings,
     HabitatTiles,
     get_habitat_tiles,
+    get_cached_habitat_tiles,
     load_habitat_stack,
     prepare_habitat_band_views,
 )
+from eolab_app.processing.raster_preparation import RasterGrid
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import ModelJobResponse, ModelRunRequest
@@ -151,13 +153,16 @@ def _tile_response(column: int, row: int) -> bytes:
         return memory.read()
 
 
+@pytest.mark.parametrize("interleave", ["pixel", "band"])
 def test_prepared_band_views_keep_source_validity_and_selected_order(
     tmp_path: Path,
+    interleave: str,
 ) -> None:
     """Read nonconsecutive bands with a dataset mask, declared NoData and zero.
 
     Args:
         tmp_path: Private directory for the input tile and temporary mosaics.
+        interleave: Pixel- or band-contiguous original with both sources of validity.
     """
     configuration = _fixture_configuration(2018)
     bands = dict(zip(configuration.band_names(), configuration.bands, strict=True))
@@ -180,7 +185,7 @@ def test_prepared_band_views_keep_source_validity_and_selected_order(
         transform=from_origin(0, 2000, 1000, 1000),
         nodata=-9999,
         compress="DEFLATE",
-        interleave="pixel",
+        interleave=interleave,
     ) as dataset:
         dataset.write(pixels)
         dataset.scales = scales
@@ -202,6 +207,96 @@ def test_prepared_band_views_keep_source_validity_and_selected_order(
                 np.testing.assert_array_equal(
                     view.read(1, masked=True).filled(np.nan), expected
                 )
+
+
+def test_prepared_reruns_read_new_coverage_and_only_write_missing_selected_channels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Add geographic coverage and switch both dataset roles off then on again.
+
+    Args:
+        tmp_path: Published acquisition tiles and separate per-job views.
+        monkeypatch: Return controlled real raster bytes at the acquisition boundary.
+    """
+    from eolab_app.processing import habitat_earth_engine
+
+    config = _fixture_configuration(2018)
+    cache = tmp_path / "cache"
+    staging = tmp_path / "downloads"
+    staging.mkdir()
+    area = box(0, 8000, 16000, 16000)
+    grid = RasterGrid(
+        rasterio.crs.CRS.from_epsg(6933), from_origin(0, 16000, 500, 500), 32, 16
+    )
+    scientific = dict(zip(config.band_names(), config.bands, strict=True))
+    by_id = {band.identifier: name for name, band in scientific.items()}
+    full = tuple(by_id[band] for band in ("d35", "d20", "d04", "d02"))
+    subset = (full[1], full[3])
+    writes: list[Path] = []
+    original_publish = habitat_earth_engine.publish_band_tile
+
+    def publish(local: Path, destination: Path) -> None:
+        """Count complete selected-channel files actually offered for publication.
+
+        Args:
+            local: Closed attempt-local raster.
+            destination: Its immutable shared cache name.
+        """
+        original_publish(local, destination)
+        writes.append(destination)
+
+    monkeypatch.setattr(habitat_earth_engine, "publish_band_tile", publish)
+    for run, (selected, added_column, expected_writes) in enumerate(
+        (
+            (subset, 0, 2),
+            (full, None, 2),
+            (subset, None, 0),
+            (full, None, 0),
+            (full, 1, 4),
+        )
+    ):
+        if added_column is not None:
+            with monkeypatch.context() as acquisition:
+                _use_offline_earth_engine(
+                    acquisition, [({"status": "200"}, _tile_response(added_column, 0))]
+                )
+                get_habitat_tiles(
+                    box(added_column * 8000, 8000, (added_column + 1) * 8000, 16000),
+                    config,
+                    HabitatEarthEngineSettings(
+                        "fixture", tmp_path / "private-key.json"
+                    ),
+                    cache_directory=cache,
+                    working_directory=staging,
+                    progress=lambda _: None,
+                    check_cancelled=lambda: None,
+                )
+        inputs = get_cached_habitat_tiles(area, config, cache)
+        assert inputs.required_tiles == 2 and len(inputs.tiles) == (
+            2 if run == 4 else 1
+        )
+        before = len(writes)
+        seen: list[int] = []
+        attempt = tmp_path / f"run-{run}"
+        attempt.mkdir()
+        with prepare_habitat_band_views(
+            inputs, attempt, selected, grid=grid, on_tile=seen.append
+        ) as paths:
+            assert tuple(paths) == selected
+            for name in selected:
+                original = _fixture_values()[scientific[name].identifier][
+                    :8, :16
+                ].copy()
+                if run < 4:
+                    original[:, 8:] = np.nan
+                with rasterio.open(paths[name]) as raster:
+                    expected = original.repeat(2, axis=0).repeat(2, axis=1)
+                    np.testing.assert_array_equal(
+                        raster.read(1, masked=True).filled(np.nan), expected
+                    )
+        assert seen == list(range(1, len(inputs.tiles) + 1))
+        assert len(writes) - before == expected_writes
 
 
 def _fixture_native_target(
@@ -238,6 +333,7 @@ def _fixture_native_target(
     [
         "complete",
         "partial",
+        "new_tile",
         "empty",
         "wrong_year",
         "no_references",
@@ -253,6 +349,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     coverage: Literal[
         "complete",
         "partial",
+        "new_tile",
         "empty",
         "wrong_year",
         "no_references",
@@ -337,7 +434,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         for row in range(2)
         for column in range(3)
         if coverage != "empty"
-        and not (coverage == "partial" and (column, row) == (1, 1))
+        and not (coverage in {"partial", "new_tile"} and (column, row) == (1, 1))
         and not (coverage == "selected" and (column, row) == (2, 1))
         and not (coverage == "no_references" and row == 0)
     ]
@@ -410,7 +507,27 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             The completed or failed job, including its artifact when ready.
         """
         try:
-            for index in range(2 if coverage in {"complete", "partial"} else 1):
+            first_valid_count = None
+            for index in range(
+                2 if coverage in {"complete", "partial", "new_tile"} else 1
+            ):
+                if coverage == "new_tile" and index == 1:
+                    with monkeypatch.context() as acquisition:
+                        _use_offline_earth_engine(
+                            acquisition, [({"status": "200"}, _tile_response(1, 1))]
+                        )
+                        get_habitat_tiles(
+                            box(8000, 0, 16000, 8000),
+                            _fixture_configuration(2018),
+                            HabitatEarthEngineSettings(
+                                "private-project", tmp_path / "private-key.json"
+                            ),
+                            cache_directory=cache,
+                            working_directory=staging,
+                            progress=lambda _: None,
+                            check_cancelled=lambda: None,
+                        )
+                    prepared_tiles.append((1, 1))
                 now = datetime.now(timezone.utc)
                 row = {
                     "id": str(index + 1) * 32,
@@ -454,6 +571,11 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                     ).exists()
                 else:
                     assert artifact is not None, store.finish.call_args
+                    if coverage == "new_tile":
+                        if first_valid_count is None:
+                            first_valid_count = artifact.valid_pixels
+                        else:
+                            assert artifact.valid_pixels > first_valid_count
                     row.update(
                         status="ready",
                         artifact=asdict(artifact),
@@ -472,6 +594,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     if coverage in {"empty", "wrong_year", "no_references"}:
         return
     response = ModelJobResponse.model_validate(serialize_processing_job(ready))
+    assert response.completionEstimate is None
     assert response.result.name == "reference_similarity"
     assert response.result.preparedInputCoverage.model_dump() == {
         "requiredTiles": 6,

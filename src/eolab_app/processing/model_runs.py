@@ -575,6 +575,42 @@ def record_model_preparation(
     )
 
 
+def compact_model_timings(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only work sizes and elapsed stage times from finished raster model runs.
+
+    Args:
+        records: Owner-scoped, newest-first completed jobs from the same build and recipe.
+
+    Returns:
+        Small timing profiles for admission. Incomplete old observations cannot
+        establish a time to publication and are excluded.
+    """
+    history = []
+    for record in records:
+        stages, grid = record["stages"], record["grid"]
+        if not grid or not stages or any(s["endedAt"] is None for s in stages):
+            continue
+        timings = {
+            s["phase"]: {
+                "seconds": (
+                    datetime.fromisoformat(s["endedAt"])
+                    - datetime.fromisoformat(s["startedAt"])
+                ).total_seconds(),
+                "total": s.get("total"),
+                "position": position,
+            }
+            for position, s in enumerate(stages)
+        }
+        history.append(
+            {
+                "work": record["work"],
+                "cells": grid["width"] * grid["height"],
+                "stages": timings,
+            }
+        )
+    return history
+
+
 def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a model job record into the status response shown to its user.
 
@@ -612,16 +648,33 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             total=progress["totalBlocks"],
             unit="blocks",
         )
-    if status == "running" and isinstance(measured["phase"], str):
+    stages = progress.get("stages", [])
+    estimate = None
+    forecast = status in {"queued", "running"} and "timingWork" in summary
+    if (
+        stages
+        or forecast
+        or (status == "running" and isinstance(measured["phase"], str))
+    ):
+        descriptions: dict[str, str] = {}
         try:
             operation = get_model_operation(summary["operationId"])
         except ProcessingError as error:
             if error.code != "unsupported_model_operation":
                 raise
         else:
-            measured["description"] = dict(operation.progress_descriptions).get(
-                measured["phase"]
-            )
+            descriptions = dict(operation.progress_descriptions)
+            if forecast and operation.completion_estimate is not None:
+                estimate = operation.completion_estimate(
+                    summary, stages, datetime.now(timezone.utc)
+                )
+        if status == "running":
+            measured["description"] = descriptions.get(measured["phase"])
+        stages = [
+            {**stage, "description": descriptions.get(stage["phase"])}
+            for stage in stages
+        ]
+    measured["stages"] = stages
     identifier = row["id"]
     result = None
     if artifact is not None:
@@ -672,6 +725,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "progress": measured,
+        "completionEstimate": estimate,
         "error": row["error"],
         "result": result,
         "artifacts": serialize_model_artifacts(row),

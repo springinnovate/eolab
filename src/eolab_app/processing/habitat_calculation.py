@@ -28,7 +28,7 @@ from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.artifacts import NativeStageProgress
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.habitat_models import (
     HabitatCalculationInputs,
@@ -42,6 +42,7 @@ from eolab_app.processing.habitat_earth_engine import (
     load_habitat_stack,
     prepare_habitat_band_views,
 )
+from eolab_app.processing.habitat_raster_cache import prepare_manual_habitat_bands
 from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_preparation import (
@@ -64,11 +65,14 @@ class HabitatSources:
         cache_directory: Private prepared-input cache for the original model
             stack, supplied only for cached-input execution. No connection or
             credentials are needed to read completed tiles.
+        band_cache_directories: Private cache namespaces for selected, authorized manual
+            data bands. Reference and assessment masks are specific to each run.
     """
 
     rasters: dict[str, Path]
     vectors: dict[str, ResolvedCatalogSelection]
     cache_directory: Path | None = None
+    band_cache_directories: dict[str, Path] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -268,6 +272,27 @@ def calculate_habitat(
         RasterioError: If a raster cannot be read or written.
         OSError: If result creation or cleanup fails.
     """
+    progress = NativeStageProgress(directory)
+    progress.report("opening_habitat_inputs")
+
+    def report_model_work(phase: str, completed: int, total: int) -> None:
+        """Record the runner's actual work callback and the subsequent TIFF close.
+
+        Args:
+            phase: Native stage name.
+            completed: Finished windows, response fits, or scientific steps.
+            total: Known stage workload.
+        """
+        unit = {
+            "Selecting sample pixels": "windows",
+            "Reading sample values": "windows",
+            "Fitting response models": "fits",
+            "Predicting raster windows": "windows",
+        }.get(phase, "steps")
+        progress.report(phase, completed, total, unit)
+        if phase == "Predicting raster windows" and completed == total:
+            progress.report("finalizing_habitat_outputs")
+
     request = prepared.inputs
     settings = request.settings
     input_coverage = None
@@ -322,9 +347,16 @@ def calculate_habitat(
                     key in stack.responseDatasets for key in band.source_dataset_keys
                 )
             )
+            progress.report("opening_habitat_inputs", 0, len(tiles.tiles), "tiles")
             views = resources.enter_context(
                 prepare_habitat_band_views(
-                    tiles, directory, predictor_names + response_names
+                    tiles,
+                    directory,
+                    predictor_names + response_names,
+                    grid=grid,
+                    on_tile=lambda count: progress.report(
+                        "opening_habitat_inputs", count, len(tiles.tiles), "tiles"
+                    ),
                 )
             )
             categorical_predictor = next(
@@ -335,31 +367,57 @@ def calculate_habitat(
                 ),
                 None,
             )
+            band_paths = {}
             for role, names in (
                 ("predictor", predictor_names),
                 ("response", response_names),
             ):
-                inputs.update(
-                    {
-                        f"{role}_{index}": (views[name], Resampling.nearest)
-                        for index, name in enumerate(names)
-                    }
-                )
+                for index, name in enumerate(names):
+                    key = f"{role}_{index}"
+                    band_paths[key] = views[name]
+                    inputs[key] = (views[name], Resampling.nearest)
         else:
             stack = cast(HabitatRasterStack, request.stack)
             predictor_names = tuple(layer.name for layer in stack.predictors)
             response_names = tuple(layer.name for layer in stack.responses)
             categorical_predictor = stack.categoricalPredictor
-        rasters = resources.enter_context(
-            prepare_raster_stack(
-                inputs,
-                grid,
-                (mapping(aoi),),
-                directory,
-                limits,
-                all_touched=False,
+            band_paths = resources.enter_context(
+                prepare_manual_habitat_bands(
+                    {
+                        name: entry
+                        for name, entry in inputs.items()
+                        if name.startswith(("predictor_", "response_"))
+                    },
+                    sources.band_cache_directories,
+                    grid,
+                    settings.output_grid.origin,
+                    directory,
+                    on_band=lambda completed, total: progress.report(
+                        "opening_habitat_inputs", completed, total, "rasters"
+                    ),
+                )
             )
-        )
+        mask_inputs = {
+            name: entry for name, entry in inputs.items() if name not in band_paths
+        }
+        rasters = dict(band_paths)
+        if mask_inputs:
+            rasters.update(
+                resources.enter_context(
+                    prepare_raster_stack(
+                        mask_inputs,
+                        grid,
+                        (mapping(aoi),),
+                        directory,
+                        limits,
+                        all_touched=False,
+                        on_progress=lambda completed, total: progress.report(
+                            "preparing_rasters", completed, total, "blocks"
+                        ),
+                    )
+                )
+            )
+        progress.report("preparing_habitat_references")
         dataset = resources.enter_context(rasterio.open(rasters["predictor_0"]))
         if request.references.kind == "raster":
             reference_path = rasters["reference_mask"]
@@ -421,10 +479,9 @@ def calculate_habitat(
                 if request.habitat_mask is not None
                 else None
             ),
-            progress=lambda phase, complete, total: write_progress(
-                directory, phase, complete, total, unit="steps"
-            ),
+            progress=report_model_work,
         )
+    progress.report("finalizing_habitat_outputs")
     result.reference_similarity.replace(directory / "result.tif")
     with ZipFile(directory / "diagnostics.zip", "w", compression=ZIP_STORED) as archive:
         for name in (

@@ -23,6 +23,7 @@ from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.source_files import SourceFileError
 from eolab_app.vector import lasso, selection_operation
 from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.feature_attributes import collect_feature_attributes
 from eolab_app.vector.lasso import LassoSelectionRequest, encode_lasso_highlights
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import MountedVectorResolver
@@ -176,10 +177,55 @@ def test_lasso_rejects_invalid_user_outlines(invalid: dict) -> None:
         SummaryPolygon.model_validate(invalid)
 
 
+def test_small_and_large_lassos_identify_every_feature(tmp_path: Path) -> None:
+    """Keep small selections exact and draw every selected polygon at reduced detail.
+
+    Args:
+        tmp_path: Disposable GeoPackage shared by both lasso selections.
+    """
+    polygons = [Point(x, 0).buffer(0.4, quad_segs=60) for x in range(50)]
+    target = _write_layer(
+        tmp_path / "parcels.gpkg",
+        [(geometry, f"parcel {x}") for x, geometry in enumerate(polygons)],
+    )
+    for count in (14, 50):
+        ids = tuple(
+            sorted(
+                match_features(
+                    target,
+                    {},
+                    VectorFilter(),
+                    required_area=box(-1, -1, count - 0.5, 1),
+                ).ids
+            )
+        )
+        assert ids == tuple(range(1, count + 1))
+        rows = collect_feature_attributes(target, ids, VectorReadLimits()).features
+        assert [(row.id, row.properties["group"]) for row in rows] == [
+            (str(x + 1), f"parcel {x}") for x in range(count)
+        ]
+        encoded = encode_lasso_highlights(target, ids, VectorReadLimits())
+        assert encoded is not None, "Every selected parcel should have a map highlight"
+        assert len(encoded) <= lasso.MAX_DISPLAY_BYTES
+        highlights = json.loads(encoded)
+        assert highlights.get("simplified", False) is (count == 50)
+        assert [f["id"] for f in highlights["features"]] == list(ids)
+        shapes = [shape(f["geometry"]) for f in highlights["features"]]
+        coordinate_count = sum(len(geometry.exterior.coords) for geometry in shapes)
+        assert coordinate_count <= lasso.MAX_DISPLAY_COORDINATES
+        for x, display in enumerate(shapes):
+            original = polygons[x]
+            assert display.geom_type == "Polygon" and display.covers(Point(x, 0))
+            if count == 14:
+                assert original.equals(display)
+            else:
+                assert len(display.exterior.coords) < len(original.exterior.coords)
+
+
 def test_highlight_budget_does_not_change_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A display-capacity failure keeps exact IDs available to the selection owner.
+    """Show a point when only one coordinate fits, and preserve IDs when none fits.
 
     Args:
         tmp_path: Disposable original GeoPackage.
@@ -191,6 +237,13 @@ def test_highlight_budget_does_not_change_membership(
     )
     monkeypatch.setattr(lasso, "MAX_DISPLAY_COORDINATES", 1)
     assert ids == (1,)
+    marker = json.loads(encode_lasso_highlights(target, ids, VectorReadLimits()))
+    assert marker["simplified"] is True
+    (feature,) = marker["features"]
+    assert feature["id"] == ids[0]
+    point = shape(feature["geometry"])
+    assert point.geom_type == "Point" and box(0, 0, 2, 2).covers(point)
+    monkeypatch.setattr(lasso, "MAX_DISPLAY_COORDINATES", 0)
     assert encode_lasso_highlights(target, ids, VectorReadLimits()) is None
 
 

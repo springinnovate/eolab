@@ -5,9 +5,10 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from threading import Event
 import logging
@@ -20,6 +21,11 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import Artifact, ProcessingError
+from eolab_app.processing.stage_progress import (
+    merge_stage_progress,
+    stage_snapshot,
+    stage_start,
+)
 from eolab_app.processing.artifact_manifest import FileDeclaration
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
@@ -76,6 +82,7 @@ class ProcessingWorker:
         uploads: VectorUploadStore | None = None,
         upload_storage: UploadStorage | None = None,
         operation_settings: Mapping[str, object] | None = None,
+        cleanup_operation_files: Callable[[], None] | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
 
@@ -88,6 +95,8 @@ class ProcessingWorker:
             areas: Catalog vector reader used to resolve filtered calculation areas.
             uploads: Storage for original uploaded vectors retained by accepted jobs.
             upload_storage: Read-only shared storage for uploaded raster inputs retained by jobs.
+            cleanup_operation_files: Reclaim expired operation-owned input files
+                during the ordinary serialized worker cleanup cycle.
             operation_settings: Server-only dependencies keyed by operation ID;
                 passed unchanged to the owning operation, never persisted.
         """
@@ -95,6 +104,7 @@ class ProcessingWorker:
         self.uploads = uploads
         self.upload_storage = upload_storage
         self.operation_settings = operation_settings or {}
+        self._cleanup_operation_files = cleanup_operation_files
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
@@ -331,7 +341,11 @@ class ProcessingWorker:
             self.jobs.heartbeat,
             row["id"],
             row["attempt_id"],
-            {"phase": "preparing"},
+            (
+                {}
+                if model is not None and operation.timed_stages
+                else {"phase": "preparing"}
+            ),
         ):
             raise ProcessingError(
                 "job_cancelled", "Calculation stopped before preparation.", 409
@@ -393,6 +407,15 @@ class ProcessingWorker:
             )
         calculation_operation = model.calculation.operation if model else operation
         handler = model_operations.get_model_operation(calculation_operation)
+        timed = model is not None and handler.timed_stages
+        if timed:
+            progress = stage_snapshot([stage_start("preparing", row.get("started_at"))])
+            if not await asyncio.to_thread(
+                self.jobs.heartbeat, row["id"], row["attempt_id"], progress
+            ):
+                raise ProcessingError(
+                    "job_cancelled", "Calculation stopped before preparation.", 409
+                )
         calculation = handler.parse_specification(
             model.calculation if model else row["spec"]
         )
@@ -443,16 +466,17 @@ class ProcessingWorker:
         )
         if status != "ok":
             raise ProcessingError(*value)
-        return await self._publish_result(row, value)
+        return await self._publish_result(row, value, timed=timed)
 
     async def _publish_result(
-        self, row: dict[str, Any], artifact: Artifact
+        self, row: dict[str, Any], artifact: Artifact, *, timed: bool = False
     ) -> Artifact:
         """Publish complete declared files without blocking heartbeats or racing cleanup.
 
         Args:
             row: Running attempt with its declared output files.
             artifact: Native result metadata; all native file handles are closed.
+            timed: Persist the native stage history and report verified output files.
 
         Returns:
             The original scientific result with its verified immutable inventory.
@@ -487,12 +511,46 @@ class ProcessingWorker:
             ),
         )
         cancelled = Event()
+        file_updates = {}
+        if timed:
+            attempt = row["attempt_id"]
+            native_progress = await asyncio.to_thread(self.artifacts.progress, attempt)
+            publishing = stage_start("publishing_outputs")
+            publishing.update(completed=0, total=len(declarations), unit="files")
+            progress = merge_stage_progress(
+                native_progress, stage_snapshot([publishing])
+            )
+            if not await asyncio.to_thread(
+                self.jobs.heartbeat, row["id"], attempt, progress
+            ):
+                raise ProcessingError(
+                    "job_cancelled", "Calculation stopped before publication.", 409
+                )
+
+            def report_verified(count: int) -> None:
+                """Persist a completed file after the publisher has verified its checksum.
+
+                Args:
+                    count: Number of verified files in the declared inventory.
+                """
+                stage = {
+                    **publishing,
+                    "completed": count,
+                    "lastProgressAt": datetime.now(timezone.utc).isoformat(
+                        timespec="microseconds"
+                    ),
+                }
+                if not self.jobs.heartbeat(row["id"], attempt, stage_snapshot([stage])):
+                    cancelled.set()
+
+            file_updates["on_verified"] = report_verified
         publication = asyncio.create_task(
             asyncio.to_thread(
                 self.artifacts.publish,
                 row["attempt_id"],
                 declarations,
                 cancelled,
+                **file_updates,
             )
         )
         try:
@@ -514,6 +572,25 @@ class ProcessingWorker:
         # Database finish still fences cancellation/late attempts after the rename.
         return replace(artifact, manifest=manifest, additional_outputs=())
 
+    async def _finish_failed_attempt(
+        self, identifier: str, attempt: str, error: dict[str, str]
+    ) -> bool:
+        """Persist the last native measurements when acknowledging a confirmed stop.
+
+        Args:
+            identifier: Internal job identity.
+            attempt: Fencing token of the stopped native child.
+            error: Sanitized reason for stopping.
+
+        Returns:
+            Whether this stopped attempt changed the durable terminal state.
+        """
+        progress = await asyncio.to_thread(self.artifacts.progress, attempt)
+        options = {"final_progress": progress} if progress.get("stages") else {}
+        return await asyncio.to_thread(
+            self.jobs.finish, identifier, attempt, None, error, **options
+        )
+
     async def _finish_stopped_attempt(self) -> None:
         """Retry the terminal acknowledgement of this lane's confirmed stopped attempt.
 
@@ -527,11 +604,9 @@ class ProcessingWorker:
         if self._stopped_attempt is None:
             return
         identifier, attempt = self._stopped_attempt
-        await asyncio.to_thread(
-            self.jobs.finish,
+        await self._finish_failed_attempt(
             identifier,
             attempt,
-            None,
             {
                 "code": "interrupted",
                 "detail": "The worker stopped before the job completed. Submit a new job to retry.",
@@ -600,11 +675,9 @@ class ProcessingWorker:
                 ):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-                    await asyncio.to_thread(
-                        self.jobs.finish,
+                    await self._finish_failed_attempt(
                         identifier,
                         attempt,
-                        None,
                         {
                             "code": "interrupted",
                             "detail": "The job was cancelled or its worker lease ended.",
@@ -629,11 +702,9 @@ class ProcessingWorker:
                 reusable_results=reusable_results,
             )
             if not finished:
-                await asyncio.to_thread(
-                    self.jobs.finish,
+                await self._finish_failed_attempt(
                     identifier,
                     attempt,
-                    None,
                     {
                         "code": "interrupted",
                         "detail": "This job was cancelled before publication.",
@@ -664,9 +735,7 @@ class ProcessingWorker:
                 }
             # Log no raw source paths, session capabilities, or connection strings.
             LOGGER.warning("Processing job %s failed: %s", identifier, detail["code"])
-            finished = await asyncio.to_thread(
-                self.jobs.finish, identifier, attempt, None, detail
-            )
+            finished = await self._finish_failed_attempt(identifier, attempt, detail)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -690,6 +759,11 @@ class ProcessingWorker:
             await asyncio.to_thread(self.jobs.cleaned, row["id"])
         retained = await asyncio.to_thread(self.jobs.active_attempts)
         await asyncio.to_thread(self.artifacts.remove_orphans, retained, 30)
+        if self._cleanup_operation_files is not None:
+            try:
+                await asyncio.to_thread(self._cleanup_operation_files)
+            except (OSError, ProcessingError, UploadError):
+                LOGGER.warning("Expired calculation input cache cleanup will retry.")
 
 
 async def serve(

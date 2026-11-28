@@ -14,6 +14,10 @@ import json
 from typing import Any, Iterator
 from uuid import uuid4
 from eolab_app.processing.artifact_manifest import read_artifact_manifest, PublishedFile
+from eolab_app.processing.stage_progress import (
+    close_stage_progress,
+    merge_stage_progress,
+)
 
 import psycopg
 from psycopg.rows import dict_row
@@ -225,6 +229,8 @@ class PostgresJobStore:
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,"
+                "progress=CASE WHEN progress ? 'stages' THEN "
+                "jsonb_set(progress, '{stages,-1,endedAt}', to_jsonb(statement_timestamp())) ELSE progress END,"
                 "updated_at=clock_timestamp() "
                 "WHERE status IN ('queued','running','cancelling')",
                 (
@@ -849,7 +855,7 @@ class PostgresJobStore:
                 )
             cursor.execute(
                 "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
-                "progress=%s,updated_at=clock_timestamp() "
+                "progress=CASE WHEN progress ? 'stages' THEN progress ELSE %s END,updated_at=clock_timestamp() "
                 "WHERE id=%s RETURNING *",
                 (
                     Jsonb(prepared.specification),
@@ -925,6 +931,38 @@ class PostgresJobStore:
                 (identifier, owner),
             )
             return cursor.fetchone()
+
+    def recent_model_stage_timings(
+        self, owner: str, operation: str, definition_sha256: str, build: str
+    ) -> list[dict[str, Any]]:
+        """Read timing observations from comparable completed jobs owned by this session.
+
+        Args:
+            owner: Processing session hash authorizing the history read.
+            operation: Model calculation operation.
+            definition_sha256: Digest of the selected recipe.
+            build: Deployment revision that will run the calculation.
+
+        Returns:
+            Newest-first workload, grid and stage records from recent ready jobs.
+            Results exclude input geometries, file paths and previous forecasts.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                """
+                SELECT j.summary->'timingWork' AS work, j.summary->'grid' AS grid,
+                       j.progress->'stages' AS stages
+                FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id
+                WHERE s.owner=%s AND s.status IS NULL AND j.status='ready' AND j.expires_at>now()
+                  AND j.summary->>'operationId'=%s
+                  AND j.summary->'model'->>'definitionSha256'=%s
+                  AND j.spec->>'applicationBuild'=%s
+                  AND j.summary ? 'timingWork' AND j.progress ? 'stages'
+                ORDER BY s.created_at DESC LIMIT 32
+                """,
+                (owner, operation, definition_sha256, build),
+            )
+            return cursor.fetchall()
 
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
@@ -1376,6 +1414,15 @@ class PostgresJobStore:
             ProcessingError: If the database cannot complete the heartbeat.
         """
         with self._transaction() as cursor:
+            if progress.get("stages"):
+                cursor.execute(
+                    "SELECT progress FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status='running' FOR NO KEY UPDATE",
+                    (identifier, attempt),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return False
+                progress = merge_stage_progress(row["progress"], progress)
             return renew_job_lease(
                 cursor,
                 job_id=identifier,
@@ -1391,6 +1438,7 @@ class PostgresJobStore:
         artifact: Artifact | None,
         error: dict[str, str] | None = None,
         reusable_results: dict[str, dict[str, object]] | None = None,
+        final_progress: dict[str, Any] | None = None,
     ) -> bool:
         """Publish the result or record why the worker stopped without one.
 
@@ -1407,6 +1455,7 @@ class PostgresJobStore:
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
                 input hash. Stored only if this attempt becomes ready.
+            final_progress: Measurements captured after a stopped native child exits.
 
         Returns:
             True only if the still-current attempt reached the requested state.
@@ -1418,7 +1467,7 @@ class PostgresJobStore:
         if artifact is not None:
             with self._transaction(acquire_lock=True) as cursor:
                 cursor.execute(
-                    "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
+                    "SELECT *,clock_timestamp() AS verified_at FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
                     (identifier, attempt),
                 )
                 row = cursor.fetchone()
@@ -1435,7 +1484,18 @@ class PostgresJobStore:
                         Jsonb(asdict(artifact)),
                         retained_bytes,
                         row["result_ttl_seconds"] or self.limits.result_ttl_seconds,
-                        Jsonb({"phase": "ready"}),
+                        Jsonb(
+                            {
+                                **(
+                                    close_stage_progress(
+                                        row["progress"], row["verified_at"]
+                                    )
+                                    if row["progress"].get("stages")
+                                    else {}
+                                ),
+                                "phase": "ready",
+                            }
+                        ),
                         identifier,
                     ),
                 )
@@ -1471,10 +1531,29 @@ class PostgresJobStore:
                         (self.limits.calculation_cache_capacity,),
                     )
                 return completed
-        with self._transaction() as cursor:
-            return acknowledge_stopped_attempt(
+        with self._transaction(acquire_lock=True) as cursor:
+            acknowledged = acknowledge_stopped_attempt(
                 cursor, job_id=identifier, attempt_id=attempt, error=error
             )
+            if acknowledged:
+                cursor.execute(
+                    "SELECT progress,updated_at FROM processing.jobs WHERE id=%s AND (progress ? 'stages' OR %s)",
+                    (identifier, bool(final_progress)),
+                )
+                if row := cursor.fetchone():
+                    progress = (
+                        merge_stage_progress(row["progress"], final_progress)
+                        if final_progress
+                        else row["progress"]
+                    )
+                    cursor.execute(
+                        "UPDATE processing.jobs SET progress=%s WHERE id=%s",
+                        (
+                            Jsonb(close_stage_progress(progress, row["updated_at"])),
+                            identifier,
+                        ),
+                    )
+            return acknowledged
 
     def get_cached_calculation_results(
         self, keys: list[str]

@@ -342,6 +342,23 @@ class ModelIdentity(ModelReference):
     title: Label
 
 
+class ModelStageTiming(ModelSchema):
+    """A named stage's start, most recent measured work, end, and optional counts.
+
+    The last work time initially equals the start. A lease renewal alone does not
+    move it. An ended stage can have incomplete counters when the attempt stopped.
+    """
+
+    phase: str
+    description: str | None = None
+    startedAt: AwareDatetime
+    lastProgressAt: AwareDatetime
+    endedAt: AwareDatetime | None = None
+    completed: Annotated[int, Field(ge=0)] | None = None
+    total: Annotated[int, Field(ge=0)] | None = None
+    unit: str | None = None
+
+
 class ModelProgress(JobProgressResponse):
     """Completed and total work for the current stage of a model run.
 
@@ -350,8 +367,10 @@ class ModelProgress(JobProgressResponse):
     operation-owned plain text for the stage, limited to 200 Unicode characters.
     It may be absent for historical responses or unrecognized phases; clients
     then use a generic running-state label without interpreting ``phase``.
+    ``stages`` retains measured intervals in execution order for instrumented runs.
     """
 
+    stages: tuple[ModelStageTiming, ...] = ()
     description: (
         Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r"\S")]
         | None
@@ -419,6 +438,33 @@ class ModelArtifactManifest(ModelSchema):
     totalBytes: Annotated[int, Field(ge=0)]
 
 
+class ModelCompletionEstimate(ModelSchema):
+    """Seconds until verified results, or calculation duration while a job is queued.
+
+    Both bounds are null while the service is learning or its forecast has gone
+    stale. The field is absent or null for terminal jobs and uninstrumented tools.
+    """
+
+    lowerSeconds: Annotated[int, Field(strict=True, ge=0)] | None
+    upperSeconds: Annotated[int, Field(strict=True, ge=1)] | None
+
+    @model_validator(mode="after")
+    def check_interval(self) -> "ModelCompletionEstimate":
+        """Check that both bounds exist together and are ordered.
+
+        Returns:
+            This estimate with a complete range or two null bounds.
+
+        Raises:
+            ValueError: If only one bound exists or the range is reversed.
+        """
+        if (self.lowerSeconds is None) != (self.upperSeconds is None):
+            raise ValueError("Both completion bounds must be supplied together")
+        if self.lowerSeconds is not None and self.lowerSeconds > self.upperSeconds:
+            raise ValueError("Completion bounds must be ordered")
+        return self
+
+
 class ModelJobResponse(JobResponse):
     """A model run's status, progress, errors and available table or raster downloads.
 
@@ -428,6 +474,7 @@ class ModelJobResponse(JobResponse):
     ``name`` is editable; ``nameTimestamp`` is the fixed creation timestamp.
     ``label`` combines both for use outside this run's details.
     ``artifacts`` is always present, with an empty list while files are unavailable.
+    ``completionEstimate`` describes time through verified publication when supported.
     """
 
     operation: Literal["model.run.v1"]
@@ -437,6 +484,7 @@ class ModelJobResponse(JobResponse):
     label: Annotated[str, Field(min_length=1, max_length=102)]
     metadataExpiresAt: datetime | None
     progress: ModelProgress
+    completionEstimate: ModelCompletionEstimate | None = None
     result: ModelResult | None
     artifacts: ModelArtifactManifest
     deletionUndo: ModelDeletionUndo | None = None

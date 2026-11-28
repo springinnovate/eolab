@@ -142,11 +142,37 @@ test("model results use the existing numeric-row and download safety validation"
     await assert.rejects(h.api.getJob(job().jobId), /download address/);
 });
 
+test("whole-run completion estimates contain a complete ordered range or explicit uncertainty", async () => {
+    for (const estimate of [{lowerSeconds: null, upperSeconds: null}, {lowerSeconds: 1, upperSeconds: 73}]) {
+        const h = fixture(() => job({completionEstimate: estimate}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).completionEstimate, estimate);
+    }
+    for (const estimate of [{}, 18, {lowerSeconds: -1, upperSeconds: 2}, {lowerSeconds: 4, upperSeconds: 3},
+        {lowerSeconds: 3, upperSeconds: null}, {lowerSeconds: null, upperSeconds: 4}]) {
+        const h = fixture(() => job({completionEstimate: estimate}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid model completion estimate/);
+    }
+});
+
 test("malformed model definitions and inconsistent progress are rejected", async () => {
     const h = fixture(() => ({models: [{...model, id: "../other"}]}));
     await assert.rejects(h.api.discoverModels(), /model identity/);
     const broken = fixture(() => job({progress: {completed: 4, total: 2}}));
     await assert.rejects(broken.api.getJob(job().jobId), /model run details/);
+});
+
+test("timed job stages accept complete work intervals and reject inconsistent measurements", async () => {
+    const stage = {phase: "publish", description: "Verifying files", startedAt: "2026-10-08T00:00:00Z",
+        lastProgressAt: "2026-10-08T00:00:01Z", endedAt: null, completed: 1, total: 3, unit: "files"};
+    for (const change of [{}, {endedAt: "2026-10-08T00:00:02Z"}]) {
+        const stages = [{...stage, ...change}], h = fixture(() => job({progress: {stages}}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).progress.stages, stages);
+    }
+    for (const stages of [null, {}, [{...stage, lastProgressAt: "bad"}], [{...stage, endedAt: stage.startedAt}],
+        [{...stage, completed: 4}], [{...stage, unit: null}], [{...stage, description: " ".repeat(40)}]]) {
+        const h = fixture(() => job({progress: {stages}}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid model stage timings/);
+    }
 });
 
 test("model progress accepts optional descriptions and bounded literal text for unfamiliar phases", async () => {

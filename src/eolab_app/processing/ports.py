@@ -1,6 +1,7 @@
 """Job persistence and artifact storage contracts used by Processing workflows."""
 
 from typing import Protocol, Any
+from collections.abc import Callable
 from pathlib import Path
 from datetime import datetime
 from threading import Event
@@ -319,6 +320,23 @@ class JobStore(Protocol):
         """
         ...
 
+    def recent_model_stage_timings(
+        self, owner: str, operation: str, definition_sha256: str, build: str
+    ) -> list[dict[str, Any]]:
+        """Read timing observations from comparable completed jobs owned by this session.
+
+        Args:
+            owner: Processing session hash authorizing the history read.
+            operation: Model calculation operation.
+            definition_sha256: Digest of the selected recipe.
+            build: Deployment revision that will run the calculation.
+
+        Returns:
+            Newest-first workload, grid and stage records from recent ready jobs.
+            Results exclude input geometries, file paths and previous forecasts.
+        """
+        ...
+
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:
@@ -466,6 +484,7 @@ class JobStore(Protocol):
         artifact: Artifact | None,
         error: dict[str, str] | None = None,
         reusable_results: dict[str, dict[str, object]] | None = None,
+        final_progress: dict[str, Any] | None = None,
     ) -> bool:
         """Publish completed work and cache values only while this attempt owns the job.
 
@@ -476,6 +495,7 @@ class JobStore(Protocol):
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
                 input hash. Stored only if this attempt becomes ready.
+            final_progress: Native measurements captured after a stopped child exits.
 
         Returns:
             True only if the still-current attempt reached the requested state.
@@ -603,6 +623,8 @@ class JobArtifactStore(Protocol):
         attempt: str,
         declarations: tuple[FileDeclaration, ...],
         cancelled: Event,
+        *,
+        on_verified: Callable[[int], None] | None = None,
     ) -> ArtifactManifest:
         """Validate declared files and atomically publish their immutable inventory.
 
@@ -611,6 +633,7 @@ class JobArtifactStore(Protocol):
             declarations: Files explicitly approved for retention by the application.
             cancelled: Signal checked during hashing and before publication. The
                 caller must wait for publication to exit before cleaning up.
+            on_verified: Optional count of files that have passed full verification.
 
         Returns:
             Verified files and exact retained bytes, including the manifest file.

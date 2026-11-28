@@ -20,6 +20,26 @@ function fixture() {
     view.render(state); return {doc, view, state, actions};
 }
 
+test("run detail distinguishes queue wait, elapsed calculation and time to all results", () => {
+    const h = fixture(), start = new Date(Date.now() - 3200).toISOString();
+    const saved = job({createdAt: start, completionEstimate: {lowerSeconds: 18, upperSeconds: 34}});
+    Object.assign(h.state, {page: "run", selectedRun: saved.jobId, runs: [saved]});
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /In queue \d+ sec\. Once started, about 18–34 seconds until results are ready/);
+    saved.status = "running";
+    saved.progress = {phase: "preparing_rasters", completed: 8, total: 8, stages: [{startedAt: start}]};
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /Elapsed \d+ sec\. About 18–34 seconds until results are ready/);
+    h.view.run = null;
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /18–34 seconds/);
+    saved.completionEstimate = {lowerSeconds: null, upperSeconds: null}; h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /Estimating time until results are ready…/);
+    for (const status of ["cancelling", "failed", "cancelled", "ready"]) {
+        saved.status = status; h.view.render(h.state); assert.equal(h.view.run.estimate.hidden, true);
+    }
+});
+
 test("checkbox model parameters submit independent boolean values", () => {
     const h = fixture();
     const recipe = {...model, inputs: {raster: {type: "raster", label: "Elevation raster (DEM)"}},
@@ -513,6 +533,24 @@ test("model progress uses the supplied description without reading operation pha
     assert.equal(describeModelProgress(run), "Measuring habitat · 0 of 5 units");
     progress.total = null;
     assert.equal(describeModelProgress(run), "Measuring habitat…");
+});
+
+test("reopening a run shows field-measured stage durations and partial work", () => {
+    const stage = {phase: "fit", description: "Fitting response models", startedAt: "2026-10-08T00:00:00Z",
+        lastProgressAt: "2026-10-08T00:00:03Z", endedAt: "2026-10-08T00:00:04Z", completed: 6, total: 6, unit: "fits"};
+    const verification = {phase: "publish", description: "Verifying and publishing output files", startedAt: stage.endedAt,
+        lastProgressAt: stage.endedAt, endedAt: null};
+    const run = job({status: "running", progress: {phase: "publish", description: verification.description, stages: [stage, verification]}});
+    const h = fixture(); Object.assign(h.state, {page: "run", selectedRun: run.jobId, runs: [run]}); h.view.render(h.state);
+    assert.equal(h.view.run.status.textContent, "Verifying and publishing output files…");
+    assert.equal(h.view.run.stageTimings.hidden, false);
+    assert.match(h.view.run.stageList.children[0].textContent, /Fitting response models.*4 sec.*6 of 6 fits/);
+    assert.match(h.view.run.stageList.children[1].textContent, /Verifying and publishing output files/);
+    run.status = "failed"; verification.endedAt = "2026-10-08T00:00:06Z";
+    h.view.render(h.state); assert.equal(h.view.run.status.textContent, "Failed");
+    assert.match(h.view.run.stageList.children[1].textContent, /2 sec/);
+    verification.endedAt = "2026-10-08T00:00:04.125Z"; h.view.render(h.state);
+    assert.match(h.view.run.stageList.children[1].textContent, /Under 1 sec/);
 });
 
 test("model stages without a description use a running label while lifecycle states take precedence", () => {

@@ -6,6 +6,7 @@ adapter with its own contracts; YAML never imports or executes arbitrary Python.
 
 from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from pydantic import BaseModel, TypeAdapter
@@ -83,6 +84,7 @@ from eolab_app.processing.downstream_models import (
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.processing import flow_area, flow_area_operation as flow
+from eolab_app.processing.habitat_runtime import estimate_habitat_completion
 from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing import habitat_preparation as habitat_inputs
 from eolab_app.processing import habitat_bulk_preparation as habitat_bulk
@@ -174,6 +176,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
             or be cancelled; native work must finish cleanup before cancellation
             releases an operation-owned concurrency gate. Shared admission continues
             to own ordinary session/source authorization and queued-job persistence.
+            A forecasting operation may return workload counts already available at admission.
         source: Extract the primary Catalog or owned run-file reference. None
             declares that the operation needs no pre-existing primary raster;
             primary_input must also be None.
@@ -206,6 +209,9 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         input_adapters: Additional operation-owned types accepted by selected inputs.
         requires_raster_grid: Whether preparation must record a raster calculation
             grid. Vector-only operations set False and retain their own policy.
+        timed_stages: Retain the operation's measured stage history through publication.
+        completion_estimate: Optional remaining-time forecast from this run's saved
+            workload, ordered stage observations and the server clock.
         progress_descriptions: Native phase names and their plain user-facing
             descriptions, each containing non-whitespace text up to 200 characters.
             Missing phases use the client's generic running-state description.
@@ -272,7 +278,16 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
     progress_descriptions: tuple[tuple[str, str], ...] = ()
-    before_queue: Callable[[Request, object | None], Awaitable[None]] | None = None
+    timed_stages: bool = False
+    before_queue: (
+        Callable[[Request, object | None], Awaitable[dict[str, Any] | None]] | None
+    ) = None
+    completion_estimate: (
+        Callable[
+            [dict[str, Any], list[dict[str, Any]], datetime], dict[str, int | None]
+        ]
+        | None
+    ) = None
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
@@ -509,6 +524,7 @@ OPERATIONS = MappingProxyType(
                 policy_type=HabitatSettings,
                 bind=habitat.bind_habitat,
                 before_queue=habitat.validate_habitat_submission,
+                completion_estimate=estimate_habitat_completion,
                 source=None,
                 polygon_inputs=habitat.get_habitat_polygon_inputs,
                 vector_selections=habitat.get_habitat_vector_selections,
@@ -528,8 +544,21 @@ OPERATIONS = MappingProxyType(
                     ("optional_raster", TypeAdapter(RasterSourceReference | None)),
                     ("raster_preparation", TypeAdapter(HabitatPreparation)),
                 ),
+                timed_stages=True,
                 progress_descriptions=(
+                    ("preparing", "Checking access to model inputs"),
+                    (
+                        "preparing_habitat_grid",
+                        "Reading the analysis area and building the model grid",
+                    ),
+                    ("opening_habitat_inputs", "Opening the selected input rasters"),
                     ("preparing_rasters", "Preparing model rasters"),
+                    ("preparing_habitat_references", "Preparing reference sites"),
+                    (
+                        "finalizing_habitat_outputs",
+                        "Closing model rasters and packaging diagnostics",
+                    ),
+                    ("publishing_outputs", "Verifying and publishing output files"),
                 )
                 + tuple(
                     (phase, phase)
