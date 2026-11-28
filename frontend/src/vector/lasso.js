@@ -7,7 +7,8 @@
  * @param {AbortSignal} signal Cancels superseded drawing or source work.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
  * @return {Promise<{matched:number,featureIds:string[],features:Array<{id:string,properties:Record<string,string|number|bigint|boolean|null>}>,geometry:Object|null}>}
- * Exact native IDs, ordered scalar rows with lossless integers, and optional whole-feature highlights.
+ * Exact native IDs, ordered scalar rows with lossless integers, and optional GeoJSON highlights.
+ * A collection with simplified=true shows reduced shapes or points for the same features.
  * @throws {Error} If the source, polygon, ownership or bounded comparison is invalid.
  * @throws {DOMException} If the request is aborted.
  */

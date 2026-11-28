@@ -245,6 +245,11 @@ test('Escape cancels a stroke and pending read while retaining the previous comp
 test('counts stay exact without a highlight and zero matches clear earlier highlighted features',async()=>{
     const h=fixture(async()=>({matched:1900,featureIds:[],geometry:null}));h.tools.setMode('lasso');
     await h.tools.select(h.getTargets()[0],polygon);assert.match(h.status.textContent,/1,900 features selected/);assert.match(h.status.textContent,/highlights are unavailable/);
+    const geometry = {type:'FeatureCollection', simplified:true, features:[{type:'Feature', id:1, properties:{}, geometry:polygon}]};
+    h.tools.setSelectionDisplay({polygon, geometry, count:1, label:'Filtered sites'});
+    assert.equal(h.tools.highlight.geometry, geometry);
+    assert.match(h.status.textContent, /1 feature selected in Filtered sites/);
+    assert.match(h.status.textContent, /simplified shapes or points/);
     h.tools.selectFeatures=async()=>h.tools.setSelectionDisplay({polygon,geometry:null,count:0,label:'Filtered sites'});
     await h.tools.select(h.getTargets()[0],polygon);assert.match(h.status.textContent,/0 features selected/);
 });

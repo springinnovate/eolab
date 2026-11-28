@@ -70,7 +70,8 @@ function sameFeatureSelection(previous, next) {
  */
 function formatLassoSelectionStatus({count, label, geometry}) {
     return `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
-        (count && geometry === null ? " Map highlights are unavailable; attributes and plots are ready." : "");
+        (count && geometry === null ? " Map highlights are unavailable; attributes and plots are ready." : "") +
+        (geometry?.simplified ? " Map highlights show simplified shapes or points." : "");
 }
 
 /**

@@ -325,7 +325,8 @@ export class MapInteractionTools {
         }).addTo(this.map);
         this.selectionMessage = `${display.count.toLocaleString()} ${display.count===1?'feature':'features'} selected in ${display.label}.` +
             (display.count > 0 ? ' Open Features to inspect or plot them.' : ' Draw another area to select features.') +
-            (display.count > 0 && display.geometry === null ? ' Map highlights are unavailable.' : '');
+            (display.count > 0 && display.geometry === null ? ' Map highlights are unavailable.' : '') +
+            (display.geometry?.simplified ? ' Map highlights show simplified shapes or points.' : '');
         if (this.mode === 'lasso' && !this.stroke) this.status.textContent = this.selectionMessage;
     }
 
