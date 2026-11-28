@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -134,6 +135,46 @@ def test_real_plan_worker_and_public_result(
     assert str(path) not in response.model_dump_json()
     ready["status"] = "cancelled"
     assert serialize_processing_job(ready)["result"] is None
+
+
+def test_worker_waits_for_input_read_on_cancellation(tmp_path: Path) -> None:
+    """Keep ownership of the cancelled attempt until its blocking source read returns.
+
+    Args:
+        tmp_path: Private scratch directory for the attempt.
+    """
+    entered, release = Event(), Event()
+    store = Mock()
+    def read_input(*args: str) -> dict[str, Any]:
+        """Hold the input read until the test lets the worker release its slot."""
+        entered.set()
+        assert release.wait(10)
+        return {"source": {"features": []}}
+
+    store.read_job_inputs.side_effect = read_input
+    artifacts = LocalJobArtifacts(tmp_path)
+    artifacts.initialize()
+    worker = ProcessingWorker(Mock(), store, artifacts, RasterClipLimits())
+    spec = UnpreparedCalculation(request=AggregatePlanRequest(
+        sources={"a": SOURCE}, wholeRaster=True,
+        calculations=[{"label": "Mean", "expression": "mean(a)"}]))
+    row = {"id": "a" * 32, "attempt_id": "b" * 32, "input_ids": ["source"],
+           "spec": spec.model_dump(mode="json", by_alias=True)}
+
+    async def cancel_read() -> None:
+        """Cancel after the read starts and observe the attempt before releasing it."""
+        task = asyncio.create_task(worker._execute(row))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=0.1)
+            assert not done, "The attempt released its slot with an active input read"
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(cancel_read())
 
 
 def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:

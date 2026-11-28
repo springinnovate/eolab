@@ -421,9 +421,14 @@ class ProcessingWorker:
         )
         directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
         if row.get("input_ids"):
-            collections = await asyncio.to_thread(
-                self.jobs.read_job_inputs, row["id"], row["attempt_id"]
+            reading = asyncio.create_task(
+                asyncio.to_thread(self.jobs.read_job_inputs, row["id"], row["attempt_id"])
             )
+            try:
+                collections = await asyncio.shield(reading)
+            finally:
+                await finish_source_task(reading)
+            del reading
             writing = asyncio.create_task(
                 asyncio.to_thread(write_captured_vector_inputs, directory, collections)
             )
