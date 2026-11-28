@@ -533,6 +533,7 @@ def test_version_22_upgrade_retains_known_turns_until_job_cleanup(
         "ALTER TABLE processing.jobs DROP COLUMN input_uploads",
         "DROP TRIGGER processing_release_inputs ON processing.jobs",
         "DROP TRIGGER record_job_turns ON processing.jobs",
+        "ALTER TABLE processing.jobs DROP COLUMN executor_scope",
         "ALTER TABLE processing.transfers DROP CONSTRAINT transfers_job_id_fkey",
         "DELETE FROM processing.schema_version; INSERT INTO processing.schema_version VALUES (1)",
     ],
@@ -554,7 +555,7 @@ def test_schema_startup_leaves_partial_or_historical_layout_untouched(
             store.migrate()
             assert connection.execute(
                 "SELECT version FROM processing.schema_version ORDER BY version"
-            ).fetchall() == [(22,), (23,)]
+            ).fetchall() == [(22,), (23,), (24,)]
             assert (
                 connection.execute(
                     "SELECT column_name FROM information_schema.columns "

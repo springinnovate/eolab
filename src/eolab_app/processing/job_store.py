@@ -156,23 +156,26 @@ class PostgresJobStore:
             ) from error
 
     def migrate(self) -> None:
-        """Install or verify the queue schema and upgrade a supported version 22 queue.
+        """Install or verify the queue schema and upgrade supported version 22 or 23 queues.
 
         Version 23 records which owners were served when each job started.
         Existing version 22 layouts are checked before upgrading because
         different historical Habitat layouts used the same version marker.
+        Version 24 separates executor restart scopes within the common capacity ledger.
         An up-to-date database is checked without changing its contents.
 
         Raises:
             UnsupportedProcessingSchemaError: If this worker cannot use the existing schema.
             ProcessingError: If the database is temporarily unavailable.
         """
+
         resources = files("eolab_jobs")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute("SELECT to_regnamespace('processing') AS namespace")
             if cursor.fetchone()["namespace"] is None:
                 cursor.execute(resources.joinpath("schema.sql").read_text())
                 cursor.execute(resources.joinpath("schema_23.sql").read_text())
+                cursor.execute(resources.joinpath("schema_24.sql").read_text())
                 return
             try:
                 cursor.execute(
@@ -196,17 +199,20 @@ class PostgresJobStore:
                 )
             if versions in ([22], list(range(1, 23))):
                 cursor.execute(resources.joinpath("schema_23.sql").read_text())
-            elif versions not in ([22, 23], list(range(1, 24))):
+                versions.append(23)
+            if versions in ([22, 23], list(range(1, 24))):
+                cursor.execute(resources.joinpath("schema_24.sql").read_text())
+            elif versions not in ([22, 23, 24], list(range(1, 25))):
                 raise UnsupportedProcessingSchemaError(
                     "The installed Processing schema has an unsupported version history. "
-                    "This worker requires a supported version 22 or 23 layout."
+                    "This worker requires a supported version 22, 23 or 24 layout."
                 )
 
     def interrupt_unfinished_jobs_on_restart(self) -> int:
         """Discard pending work before the restarted worker consumes new jobs.
 
         Call once at worker startup, after stopping the previous worker and its
-        native processes. Queued, running and cancelling jobs become interrupted;
+        native processes. Its queued, running and cancelling jobs become interrupted;
         completed results and cached values are unchanged. Keep attempt files and
         recorded file sizes until normal cleanup removes the files. Existing
         job notifications tell browsers to read the interrupted status.
@@ -224,7 +230,7 @@ class PostgresJobStore:
                 "progress=CASE WHEN progress ? 'stages' THEN "
                 "jsonb_set(progress, '{stages,-1,endedAt}', to_jsonb(statement_timestamp())) ELSE progress END,"
                 "updated_at=clock_timestamp() "
-                "WHERE status IN ('queued','running','cancelling')",
+                "WHERE executor_scope IS NULL AND status IN ('queued','running','cancelling')",
                 (
                     Jsonb(
                         {
@@ -1578,6 +1584,10 @@ class PostgresJobStore:
             cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             self._delete_old_job_records(cursor)
+            cursor.execute(
+                "DELETE FROM processing.jobs WHERE executor_scope IS NOT NULL "
+                "AND status='queued' AND expires_at<=clock_timestamp()"
+            )
             self._finalize_deleted_jobs(cursor)
             cursor.execute(
                 "UPDATE processing.jobs SET retained_metadata=NULL,retained_outcome=NULL "

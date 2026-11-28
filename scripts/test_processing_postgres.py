@@ -92,6 +92,7 @@ def build_image(application_image: str | None) -> str:
         "RUN python -m venv --system-site-packages /test-venv "
         "&& /test-venv/bin/python -m pip install --no-cache-dir 'pytest==8.4.2'\n"
         "COPY pyproject.toml ./\nCOPY tests/ ./tests/\nCOPY scripts/ ./scripts/\n"
+        "COPY services/jobs/job_service/ ./services/jobs/job_service/\n"
         "COPY docs/model-examples/ ./docs/model-examples/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
         "ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1\n"
@@ -110,6 +111,7 @@ def build_image(application_image: str | None) -> str:
                     ROOT / name for name in ("pyproject.toml", "README.md", "LICENSE")
                 ]
                 paths += list((ROOT / "tests").rglob("*.py"))
+                paths += list((ROOT / "services/jobs/job_service").rglob("*.py"))
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-catalog.json")
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-shared.json")
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-v5.json")

@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from job_service.app import create_app
 from job_service.configuration import Settings, load_settings
 from job_service.executor import run_job
+from scheduled_jobs_support import ScheduledJobsApp, scheduled_jobs_app, scheduler_api
+from test_processing_jobs import store
 
 BASE = "/api/jobs"
 ALICE = {"Authorization": "Bearer " + "a" * 48}
@@ -23,13 +25,16 @@ CALLERS = {
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(scheduled_jobs_app: ScheduledJobsApp) -> Iterator[TestClient]:
     """Provide an isolated running service with two authenticated callers.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
 
     Yields:
         Test client whose shutdown also reaps running work.
     """
-    with TestClient(create_app(Settings(callers=CALLERS))) as browser:
+    with TestClient(scheduled_jobs_app(Settings(callers=CALLERS))) as browser:
         yield browser
 
 
@@ -147,10 +152,16 @@ def test_execution_timeout_exception_and_recovery(client: TestClient) -> None:
     wait(client, delay_success, "succeeded")
 
 
-def test_queue_expiry_and_capacity() -> None:
-    """Bound waiting requests and expire them while another job is running."""
+def test_queue_expiry_and_capacity(scheduled_jobs_app: ScheduledJobsApp) -> None:
+    """Bound waiting requests and expire them while another job is running.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
+    """
     with TestClient(
-        create_app(Settings(callers=CALLERS, queue_capacity=1, record_capacity=4))
+        scheduled_jobs_app(
+            Settings(callers=CALLERS, queue_capacity=1, record_capacity=4)
+        )
     ) as client:
         blocker = submit(client, "blocker", "delay")
         wait(client, blocker, "running")
@@ -198,6 +209,18 @@ def test_owner_isolation(
     assert client.get(BASE, headers=BOB, params={"cursor": job}).status_code == 422
 
 
+def test_diagnostic_without_scheduler_cannot_run_locally() -> None:
+    """Return a retryable admission error when shared diagnostic scheduling is unavailable."""
+    with TestClient(create_app(Settings(callers=CALLERS))) as browser:
+        response = browser.post(
+            BASE,
+            headers={**ALICE, "Idempotency-Key": "no-scheduler"},
+            json={"operation": "diagnostic.v1", "inputs": {"value": "private"}},
+        )
+        assert response.status_code == 503 and response.headers["retry-after"] == "1"
+        assert browser.get(BASE, headers=ALICE).json()["jobs"] == []
+
+
 def test_authentication_and_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing/unknown credentials cannot admit or observe work.
 
@@ -240,12 +263,18 @@ def test_configuration_errors_hide_tokens(
     assert raw not in str(error.value)
 
 
-def test_idempotency_pagination_deletion_and_retention() -> None:
-    """Bound records, isolate retry keys and release capacity on delete/TTL."""
+def test_idempotency_pagination_deletion_and_retention(
+    scheduled_jobs_app: ScheduledJobsApp,
+) -> None:
+    """Bound records, isolate retry keys and release capacity on delete/TTL.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
+    """
     settings = Settings(
         callers=CALLERS, queue_capacity=1, record_capacity=2, retention_seconds=2
     )
-    with TestClient(create_app(settings)) as client:
+    with TestClient(scheduled_jobs_app(settings)) as client:
         body = {
             "operation": "diagnostic.v1",
             "inputs": {"value": {"a": 1, "b": 2}, "mode": "normal"},
@@ -378,14 +407,18 @@ def test_process_cancellation_reaps_before_return(
     asyncio.run(scenario())
 
 
-def test_lifespan_shutdown_and_restart() -> None:
-    """Shutdown cancels a long delay promptly; a new app has no retained state."""
+def test_lifespan_shutdown_and_restart(scheduled_jobs_app: ScheduledJobsApp) -> None:
+    """Shutdown cancels a long delay promptly; a new app has no retained state.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
+    """
     start = time.monotonic()
-    with TestClient(create_app(Settings(callers=CALLERS))) as client:
+    with TestClient(scheduled_jobs_app(Settings(callers=CALLERS))) as client:
         job = submit(client, "shutdown", "delay", seconds=30)
         wait(client, job, "running")
         submit(client, "queued-at-shutdown")
     assert time.monotonic() - start < 10
-    with TestClient(create_app(Settings(callers=CALLERS))) as restarted:
+    with TestClient(scheduled_jobs_app(Settings(callers=CALLERS))) as restarted:
         assert restarted.get(f"{BASE}/{job}", headers=ALICE).status_code == 404
         assert restarted.get(BASE, headers=ALICE).json()["jobs"] == []

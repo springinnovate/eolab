@@ -12,6 +12,7 @@ WHERE false;
 -- Only keys and lifecycle hooks that affect correctness participate. An index's
 -- name and optional query-performance indexes do not determine compatibility.
 WITH version_23 AS (SELECT FROM processing.schema_version WHERE version=23),
+version_24 AS (SELECT FROM processing.schema_version WHERE version=24),
 required_keys(relation, columns, partial) AS (VALUES
     ('jobs', ARRAY['id'], false), ('jobs', ARRAY['work_key'], true),
     ('job_subscribers', ARRAY['id'], false), ('job_subscribers', ARRAY['owner','request_key'], false),
@@ -19,6 +20,7 @@ required_keys(relation, columns, partial) AS (VALUES
     ('transfers', ARRAY['id'], false), ('inputs', ARRAY['id'], false),
     ('calculation_results', ARRAY['cache_key'], false)
     UNION ALL SELECT 'job_turns', ARRAY['job_id','owner'], false FROM version_23
+    UNION ALL SELECT 'executor_sessions', ARRAY['scope'], false FROM version_24
 ), required_hooks(relation, function_name) AS (VALUES
     ('jobs','retain_terminal_metadata'), ('jobs','release_finished_inputs'),
     ('jobs','notify_job_change'), ('jobs','notify_execution_capacity'),
@@ -31,6 +33,17 @@ required_keys(relation, columns, partial) AS (VALUES
 )
 SELECT 'the subscribed_jobs view' AS problem
 WHERE (SELECT relkind FROM pg_class WHERE oid='processing.subscribed_jobs'::regclass)<>'v'
+UNION ALL
+SELECT 'executor ticket layout' FROM version_24 WHERE EXISTS (
+    SELECT FROM (VALUES ('jobs','executor_scope','text'), ('executor_sessions','instance','uuid'),
+                        ('executor_sessions','claim_sequence','bigint'), ('executor_sessions','stopped_attempt','uuid'),
+                        ('executor_sessions','stopped_with_lease','boolean')) AS field(rel, col, typ)
+    WHERE NOT EXISTS (SELECT FROM pg_attribute WHERE attrelid=to_regclass('processing.' || field.rel)
+                      AND attname=field.col AND atttypid=field.typ::regtype AND NOT attisdropped)
+)
+UNION ALL
+SELECT 'unexpected unversioned executor sessions' WHERE NOT EXISTS (SELECT FROM version_24)
+    AND to_regclass('processing.executor_sessions') IS NOT NULL
 UNION ALL
 SELECT 'unexpected unversioned job turns' WHERE NOT EXISTS (SELECT FROM version_23)
     AND to_regclass('processing.job_turns') IS NOT NULL

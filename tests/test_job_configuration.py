@@ -25,7 +25,7 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     Args:
         monkeypatch: Isolated environment fixture.
     """
-    for name in (*LIMITS, "JOBS_CALLERS"):
+    for name in (*LIMITS, "JOBS_CALLERS", "JOBS_SCHEDULER_TOKEN"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -106,6 +106,7 @@ def test_compose_shares_one_eolab_credential() -> None:
     assert 'JOBS_CALLERS: \'{"eolab":"${EOLAB_JOBS_TOKEN-}"}\'' in jobs
     assert '"JOBS_TOKEN=${EOLAB_JOBS_TOKEN-}"' in app
     assert example.count("EOLAB_JOBS_TOKEN=") == 1
+    assert "EOLAB_JOBS_SCHEDULER_TOKEN" in jobs and "EOLAB_JOBS_SCHEDULER_TOKEN" in app
     for obsolete in ("EOLAB_JOBS_CALLERS", "EOLAB_VECTOR_OUTLINE_JOBS_TOKEN"):
         assert obsolete not in compose
         assert obsolete not in example

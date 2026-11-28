@@ -22,8 +22,11 @@ WITH waiting AS (
     FROM processing.jobs AS j
     JOIN processing.job_subscribers AS s ON s.job_id = j.id
     WHERE j.status = 'queued' AND s.status IS NULL
+      AND j.executor_scope IS NOT DISTINCT FROM %(executor_scope)s::text
+      AND (%(priorities)s::jsonb IS NULL OR
+           (%(priorities)s::jsonb ? j.id AND j.expires_at > clock_timestamp()))
       AND (%(supported_operations)s::text[] IS NULL OR j.operation = ANY(%(supported_operations)s))
-    ORDER BY s.owner, s.created_at, s.id
+    ORDER BY s.owner, (%(priorities)s::jsonb ->> j.id)::integer DESC, s.created_at, s.id
 ), next_job AS (
     SELECT waiting.id, waiting.owner, clock_timestamp() AS started_at
     FROM waiting
@@ -66,6 +69,8 @@ def claim_next_job(
     lease_seconds: int,
     supported_operations: list[str] | None,
     attempt_id: str | None = None,
+    executor_scope: str | None = None,
+    priorities: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     """Claim a compatible job for the next session under the shared worker limit.
 
@@ -82,6 +87,9 @@ def claim_next_job(
         attempt_id: Fresh execution token chosen by the worker before this call so
             it can identify a committed claim if the reply is lost. When omitted,
             the scheduler generates the token.
+        executor_scope: Supervisor that owns these tickets. None selects durable Processing work.
+        priorities: Eligible transient ticket IDs and their current Jobs priorities.
+            Higher values start first within a group. None uses ordinary session FIFO.
 
     Returns:
         The running job row with its selected owner and new attempt ID, or None
@@ -101,6 +109,8 @@ def claim_next_job(
                 "attempt_id": uuid4().hex if attempt_id is None else attempt_id,
                 "lease_seconds": lease_seconds,
                 "supported_operations": supported_operations,
+                "executor_scope": executor_scope,
+                "priorities": Jsonb(priorities) if priorities is not None else None,
             },
         )
         return cursor.fetchone()

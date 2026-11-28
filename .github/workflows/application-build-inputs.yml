@@ -145,20 +145,30 @@ jobs:
         run: |
           set -euo pipefail
           docker build --platform linux/amd64 -f services/jobs/Dockerfile -t eolab-jobs:preview .
-          trap 'docker logs eolab-jobs-preview; docker rm -f eolab-jobs-preview' EXIT
-          export JOBS_SMOKE_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
-          echo "::add-mask::$JOBS_SMOKE_TOKEN"
-          export JOBS_CALLERS=$(python3 -c 'import json, os; print(json.dumps({"smoke": os.environ["JOBS_SMOKE_TOKEN"]}))')
-          docker run -d --name eolab-jobs-preview --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --cpus 1 --memory 2g \
-            --mount "type=bind,src=$PWD,dst=/scan-source,readonly" \
-            --env JOBS_CALLERS -p 127.0.0.1:8082:8080 eolab-jobs:preview
-          # Docker can reset connections before Uvicorn is ready to accept them.
-          curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
-            --connect-timeout 2 --max-time 5 --retry-max-time 30 \
-            http://127.0.0.1:8082/api/jobs/health
-          curl --fail http://127.0.0.1:8082/api/jobs/openapi.json > artifacts/application-builds/jobs-openapi.json
-          python3 services/jobs/smoke.py http://127.0.0.1:8082
+          export COMPOSE_PROJECT_NAME=eolab-jobs-smoke
+          export SOURCE_COMMIT=$(git rev-parse HEAD) EOLAB_SCAN_MOUNT_PATH="$PWD"
+          export EOLAB_JOBS_TOKEN=$(openssl rand -hex 32) EOLAB_JOBS_SCHEDULER_TOKEN=$(openssl rand -hex 32)
+          export EOLAB_DATABASE_PASSWORD=$(openssl rand -hex 32)
+          export EOLAB_GEOSERVER_ADMIN_PASSWORD=$(openssl rand -hex 16) EOLAB_GEOSERVER_MASTER_PASSWORD=$(openssl rand -hex 16)
+          for secret in "$EOLAB_JOBS_TOKEN" "$EOLAB_JOBS_SCHEDULER_TOKEN" "$EOLAB_DATABASE_PASSWORD"; do
+            echo "::add-mask::$secret"
+          done
+          docker tag eolab-build-inputs:2 "$COMPOSE_PROJECT_NAME-app"
+          docker tag eolab-build-inputs:2 "$COMPOSE_PROJECT_NAME-processing-worker"
+          docker tag eolab-jobs:preview "$COMPOSE_PROJECT_NAME-jobs"
+          compose=(docker compose --env-file .env.example)
+          export EOLAB_DATABASE_VOLUME_NAME="$COMPOSE_PROJECT_NAME-db" EOLAB_PROCESSING_DATA_VOLUME_NAME="$COMPOSE_PROJECT_NAME-data"
+          export EOLAB_VECTOR_UPLOAD_DATA_VOLUME_NAME="$COMPOSE_PROJECT_NAME-uploads" EOLAB_HABITAT_CREDENTIALS_VOLUME_NAME="$COMPOSE_PROJECT_NAME-habitat"
+          export EOLAB_GEOSERVER_DATA_VOLUME_NAME="$COMPOSE_PROJECT_NAME-geoserver"
+          trap '"${compose[@]}" logs --tail 100 jobs processing-worker app; "${compose[@]}" down -v' EXIT
+          "${compose[@]}" up --no-build --no-deps -d --wait --wait-timeout 180 database processing-worker app jobs
+          # Activation proves the restricted supervisor reached the migrated scheduler.
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T database psql -Atc "select count(*) from processing.executor_sessions" | grep -qx 1; then break; fi
+            sleep 1
+          done
+          "${compose[@]}" exec -T jobs python -c "from urllib.request import urlopen; print(urlopen('http://127.0.0.1:8080/api/jobs/openapi.json').read().decode())" > artifacts/application-builds/jobs-openapi.json
+          "${compose[@]}" exec -T -e JOBS_SMOKE_TOKEN="$EOLAB_JOBS_TOKEN" jobs python - http://127.0.0.1:8080 < services/jobs/smoke.py
       - name: Frontend tests in the recorded Node build stage
         if: steps.changes.outputs.application == 'true'
         run: |

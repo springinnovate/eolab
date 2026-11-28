@@ -219,6 +219,7 @@ services:
     environment:
       # The same EOLab credential is supplied to the app below.
       JOBS_CALLERS: '{"eolab":"${EOLAB_JOBS_TOKEN-}"}'
+      JOBS_SCHEDULER_TOKEN: ${EOLAB_JOBS_SCHEDULER_TOKEN:?Set a separate Jobs scheduler credential}
       JOBS_QUEUE_CAPACITY: ${EOLAB_JOBS_QUEUE_CAPACITY-32}
       JOBS_RECORD_CAPACITY: ${EOLAB_JOBS_RECORD_CAPACITY-128}
       JOBS_RETENTION_SECONDS: ${EOLAB_JOBS_RETENTION_SECONDS-3600}
@@ -268,6 +269,7 @@ services:
     restart: unless-stopped
     environment:
       - "JOBS_TOKEN=${EOLAB_JOBS_TOKEN-}"
+      - "JOBS_SCHEDULER_TOKEN=${EOLAB_JOBS_SCHEDULER_TOKEN:?Set a separate Jobs scheduler credential}"
       - "JOBS_MAX_TIMEOUT_SECONDS=${EOLAB_JOBS_MAX_TIMEOUT_SECONDS-300}"
       - "SAVED_MAP_CAPACITY=${EOLAB_SAVED_MAP_CAPACITY-1000}"
       - "SHARED_LAYER_CAPACITY=${EOLAB_SHARED_LAYER_CAPACITY-10000}"

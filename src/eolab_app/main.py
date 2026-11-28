@@ -133,6 +133,7 @@ from eolab_app.source_files import SourceFileError
 from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
+from eolab_jobs.executor_api import create_executor_router
 from eolab_app.routes.stac_proxy import (
     NumberMatchedEstimateLookup,
     create_stac_proxy_router,
@@ -979,6 +980,16 @@ def create_app(
     )
     application.include_router(create_scan_router(scan_manager))
     application.include_router(create_jobs_proxy_router(jobs_client))
+    if app_global_configuration.jobs_scheduler_token:
+        application.include_router(
+            create_executor_router(
+                token=app_global_configuration.jobs_scheduler_token,
+                scope="jobs",
+                operation="diagnostic.v1",
+                worker_count=processing_limits.worker_count,
+                lease_seconds=processing_limits.lease_seconds,
+            )
+        )
     application.include_router(
         create_system_router(
             app_global_configuration.app_version,

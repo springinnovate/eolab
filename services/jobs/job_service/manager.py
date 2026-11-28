@@ -3,15 +3,17 @@
 import asyncio
 import hashlib
 import json
+from itertools import islice
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import httpx2
 from pydantic import ValidationError
 
 from job_service.configuration import Settings
-from job_service.executor import run_job
+from job_service.executor import ExecutionResult, run_job
 from job_service.models import (
     ErrorDetail,
     JobPage,
@@ -21,8 +23,10 @@ from job_service.models import (
     SubmitJob,
 )
 from job_service.operations_registry import OPERATIONS
+from job_service.scheduler import SchedulerClient, WorkerGrant
 
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "expired"})
+SHARED_OPERATION = "diagnostic.v1"
 
 
 class JobError(Exception):
@@ -69,43 +73,70 @@ class JobRecord:
     result: JobResult | None = None
     finished_clock: float | None = None
 
+    @property
+    def dispatch_order(self) -> tuple[int, int]:
+        """Return the sort key for descending Jobs priority and FIFO ties."""
+        return -self.snapshot.priority, self.sequence
+
 
 class JobManager:
     """Manage a capacity-limited in-memory queue and execute one job at a time.
 
-    All public methods run on the hosting ASGI loop. Non-awaiting methods make
-    admission and state transitions atomic on that loop. The dispatcher creates
-    at most one execution task and owns it through process cleanup.
+    Jobs retains caller-owned HTTP records and has one isolated native lane.
+    Diagnostics obtain their start from PostgreSQL. Other installed operations
+    use the local priority queue until their individual migrations.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, scheduler: SchedulerClient | None = None
+    ) -> None:
         """Initialize empty, non-durable state.
 
         Args:
             settings: Validated deployment capacity and timeout policy.
+            scheduler: Authenticated shared scheduler. Diagnostics require it.
         """
         self.settings = settings
+        self.scheduler = scheduler
+        self.queue_changes = asyncio.Lock()
+        self.withdrawals: set[UUID] = set()
+        self.activation: asyncio.Task[None] | None = None
         self.records: dict[UUID, JobRecord] = {}
         self.keys: dict[tuple[str, str], UUID] = {}
         self.sequence = 0
         self.wake = asyncio.Event()
         self.dispatcher: asyncio.Task[None] | None = None
-        self.active: asyncio.Task[None] | None = None
+        self.active: asyncio.Task[None] | asyncio.Task[bool] | None = None
         self.accepting = False
 
     async def start(self) -> None:
         """Start the single dispatcher once for this application lifespan."""
         self.accepting = True
+        if self.scheduler is not None:
+            self.activation = asyncio.create_task(self._activate_scheduler())
         self.dispatcher = asyncio.create_task(self._dispatch())
+
+    async def _activate_scheduler(self) -> None:
+        """Recover this stopped container's tickets even when no new requests arrive."""
+        while self.accepting:
+            try:
+                await self.scheduler.activate()
+                return
+            except httpx2.HTTPError:
+                await asyncio.sleep(1)
 
     async def close(self) -> None:
         """Stop admission, cancel all pending work and reap the executing child."""
         self.accepting = False
-        for record in self.records.values():
-            self._cancel(record)
+        async with self.queue_changes:
+            for record in self.records.values():
+                self._cancel(record)
         self.wake.set()
         if self.dispatcher is not None:
             await self.dispatcher
+        if self.activation is not None:
+            self.activation.cancel()
+            await asyncio.gather(self.activation, return_exceptions=True)
 
     def _get_owned_job(self, owner: str, job_id: UUID) -> JobRecord:
         """Find a job belonging to this caller after removing expired records.
@@ -126,7 +157,24 @@ class JobManager:
             raise JobError("not_found", "Job not found")
         return record
 
-    def submit(self, owner: str, key: str, request: SubmitJob) -> JobSnapshot:
+    async def submit(self, owner: str, key: str, request: SubmitJob) -> JobSnapshot:
+        """Serialize admission with claims and retries before acknowledging a caller's job.
+
+        Args:
+            owner: Authenticated service principal.
+            key: Caller-scoped idempotency key.
+            request: Validated submission.
+
+        Returns:
+            The admitted job's public snapshot.
+
+        Raises:
+            JobError: If validation, idempotency, local capacity or shared admission fails.
+        """
+        async with self.queue_changes:
+            return await self._submit(owner, key, request)
+
+    async def _submit(self, owner: str, key: str, request: SubmitJob) -> JobSnapshot:
         """Queue an operation or return the job from an identical submission retry.
 
         Preserve declared input aliases when serializing the worker's request.
@@ -190,6 +238,18 @@ class JobManager:
             priority=request.priority,
             submittedAt=datetime.now(timezone.utc),
         )
+        queue_deadline = time.monotonic() + queue
+        if request.operation == SHARED_OPERATION:
+            if self.scheduler is None:
+                raise JobError(
+                    "capacity", "The shared job scheduler is unavailable; retry later"
+                )
+            try:
+                await self.scheduler.admit(job_id, snapshot.submittedAt, queue)
+            except httpx2.HTTPError:
+                raise JobError(
+                    "capacity", "The shared job scheduler is unavailable; retry later"
+                ) from None
         self.records[job_id] = JobRecord(
             owner,
             key,
@@ -203,7 +263,7 @@ class JobManager:
                 allow_nan=False,
             ).encode(),
             self.sequence,
-            time.monotonic() + queue,
+            queue_deadline,
             execution,
         )
         self.keys[(owner, key)] = job_id
@@ -317,7 +377,7 @@ class JobManager:
             JobError: If unavailable or not succeeded.
         """
         record = self._get_owned_job(owner, job_id)
-        if record.result is None:
+        if record.snapshot.status != "succeeded" or record.result is None:
             raise JobError(
                 "conflict", "Job has no successful result; inspect its status"
             )
@@ -346,6 +406,12 @@ class JobManager:
             record: Owned record.
             status: Terminal outcome.
         """
+        if (
+            record.snapshot.operation == SHARED_OPERATION
+            and record.snapshot.status == "queued"
+        ):
+            self.withdrawals.add(record.snapshot.jobId)
+            self.wake.set()
         record.snapshot.status = status
         record.snapshot.finishedAt = datetime.now(timezone.utc)
         record.finished_clock = time.monotonic()
@@ -385,17 +451,74 @@ class JobManager:
                 self.records.pop(job_id)
                 self.keys.pop((record.owner, record.key))
 
-    async def _execute(self, record: JobRecord) -> None:
+    async def _run_claimed(
+        self, record: JobRecord, grant: WorkerGrant, attempt: UUID
+    ) -> ExecutionResult:
+        """Supervise one granted child and reap it if the shared lease cannot be renewed.
+
+        Args:
+            record: Locally authorized inputs and cancellation signal.
+            grant: Shared ticket and heartbeat interval.
+            attempt: Fencing token for this native execution.
+
+        Returns:
+            Native outcome after exit, or failure if its lease was lost.
+        """
+        child = asyncio.create_task(
+            run_job(record.payload, record.cancellation, record.execution_seconds)
+        )
+        try:
+            while True:
+                done, _ = await asyncio.wait({child}, timeout=grant.heartbeat_seconds)
+                if done:
+                    return child.result()
+                if not await self.scheduler.renew(grant.job_id, attempt):
+                    return ExecutionResult("failed")
+        finally:
+            if not child.done():
+                record.cancellation.set()
+                await child
+
+    async def _release(self, job_id: UUID, attempt: UUID) -> bool:
+        """Retry a confirmed native stop without starting another child in this lane.
+
+        Args:
+            job_id: Stopped ticket.
+            attempt: Its original claim token, reused after a lost reply.
+
+        Returns:
+            Whether the result was acknowledged with a live lease.
+        """
+        while True:
+            try:
+                return await self.scheduler.release(job_id, attempt)
+            except httpx2.HTTPError as error:
+                if not self.accepting or (
+                    isinstance(error, httpx2.HTTPStatusError)
+                    and error.response.status_code == 409
+                ):
+                    # The replacement recovers this executor after the old container exits.
+                    return False
+                await asyncio.sleep(0.25)
+
+    async def _execute(
+        self, record: JobRecord, claim: tuple[WorkerGrant, UUID] | None = None
+    ) -> None:
         """Own the execution slot until subprocess cleanup completes.
 
         Args:
             record: One admitted running job.
+            claim: Shared authorization for diagnostics. Legacy operations own their local start.
         """
+        status: JobStatus = "failed"
         try:
-            outcome = await run_job(
-                record.payload, record.cancellation, record.execution_seconds
-            )
-            status = "cancelled" if record.cancellation.is_set() else outcome.status
+            if claim is None:
+                outcome = await run_job(
+                    record.payload, record.cancellation, record.execution_seconds
+                )
+            else:
+                outcome = await self._run_claimed(record, *claim)
+            status = outcome.status
             if status == "succeeded":
                 # Validate the subprocess result at the external-system boundary.
                 value = OPERATIONS[
@@ -404,34 +527,107 @@ class JobManager:
                 record.result = JobResult(
                     jobId=record.snapshot.jobId, value=value.model_dump(mode="json")
                 )
-            self._finish(record, status)
         except Exception:
-            self._finish(record, "failed")
+            status = "failed"
         finally:
+            if claim is not None and not await self._release(
+                record.snapshot.jobId, claim[1]
+            ):
+                record.result = None
+                status = "failed"
+            if record.snapshot.status == "cancelling":
+                status = "cancelled"
+                record.result = None
+            self._finish(record, status)
             self.wake.set()
+
+    async def _start_next(self) -> None:
+        """Let PostgreSQL choose among diagnostics eligible for the single Jobs native lane."""
+        self._expire_queued_jobs_and_remove_old_records()
+        queued = [
+            record
+            for record in self.records.values()
+            if record.snapshot.status == "queued"
+        ]
+        local_job = min(
+            (
+                record
+                for record in queued
+                if record.snapshot.operation != SHARED_OPERATION
+            ),
+            key=lambda record: record.dispatch_order,
+            default=None,
+        )
+        eligible = {
+            str(record.snapshot.jobId): record.snapshot.priority
+            for record in queued
+            if record.snapshot.operation == SHARED_OPERATION
+            and (local_job is None or record.dispatch_order < local_job.dispatch_order)
+        }
+        claim = None
+        record = local_job
+        if self.scheduler is not None and (
+            eligible or self.scheduler.unanswered is not None
+        ):
+            try:
+                claim = await self.scheduler.claim(eligible)
+            except httpx2.HTTPError:
+                # Recover the same token before any diagnostic starts. Legacy work is independent.
+                claim = None
+            if claim is not None:
+                grant, attempt = claim
+                record = self.records.get(grant.job_id)
+                self._expire_queued_jobs_and_remove_old_records()
+                if (
+                    record is not None
+                    and record.snapshot.status == "queued"
+                    and not grant.may_start
+                ):
+                    self._finish(record, "failed")
+                if (
+                    not self.accepting
+                    or record is None
+                    or record.snapshot.status != "queued"
+                ):
+                    self.active = asyncio.create_task(
+                        self._release(grant.job_id, attempt)
+                    )
+                    return
+        if (
+            record is not None
+            and record.snapshot.status == "queued"
+            and time.monotonic() >= record.queue_deadline
+        ):
+            self._finish(record, "expired")
+            if claim is not None:
+                self.active = asyncio.create_task(
+                    self._release(record.snapshot.jobId, claim[1])
+                )
+            return
+        if record is not None and self.accepting and record.snapshot.status == "queued":
+            record.snapshot.status = "running"
+            record.snapshot.startedAt = datetime.now(timezone.utc)
+            self.active = asyncio.create_task(self._execute(record, claim))
 
     async def _dispatch(self) -> None:
         """Run the highest-priority waiting job, reconciling expiry every 100 ms."""
         while self.accepting or self.active is not None:
             self.wake.clear()
             self._expire_queued_jobs_and_remove_old_records()
+            if self.withdrawals:
+                removed = set(islice(self.withdrawals, self.settings.record_capacity))
+                try:
+                    await self.scheduler.withdraw(removed)
+                    self.withdrawals.difference_update(removed)
+                except httpx2.HTTPError:
+                    # The queue deadline also bounds retention during an outage.
+                    pass
             if self.active is not None and self.active.done():
                 await self.active
                 self.active = None
             if self.accepting and self.active is None:
-                queued = [
-                    record
-                    for record in self.records.values()
-                    if record.snapshot.status == "queued"
-                ]
-                if queued:
-                    record = min(
-                        queued,
-                        key=lambda item: (-item.snapshot.priority, item.sequence),
-                    )
-                    record.snapshot.status = "running"
-                    record.snapshot.startedAt = datetime.now(timezone.utc)
-                    self.active = asyncio.create_task(self._execute(record))
+                async with self.queue_changes:
+                    await self._start_next()
             if not self.accepting and self.active is None:
                 break
             try:
