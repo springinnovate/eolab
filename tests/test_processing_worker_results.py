@@ -99,7 +99,7 @@ def test_real_plan_worker_and_public_result(
     row = {
         "id": identifier,
         "input_uploads": {},
-        "has_input_payloads": True,
+        "input_ids": [identifier],
         "attempt_id": "b" * 32,
         "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,

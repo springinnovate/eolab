@@ -1313,13 +1313,26 @@ class PostgresJobStore:
                 supported_operations=supported_operations,
                 attempt_id=attempt_id,
             )
-            if row is not None:
-                cursor.execute(
-                    "SELECT FROM processing.job_inputs WHERE job_id=%s LIMIT 1",
-                    (row["id"],),
-                )
-                row["has_input_payloads"] = cursor.fetchone() is not None
-            return row
+            return self._claim_with_inputs(cursor, row) if row is not None else None
+
+    @staticmethod
+    def _claim_with_inputs(
+        cursor: psycopg.Cursor[dict[str, Any]], job: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Include the retained vector input IDs when returning a fresh or recovered claim.
+
+        Args:
+            cursor: Transaction holding the claim.
+            job: Running job owned by this worker attempt.
+
+        Returns:
+            The claimed job with its input IDs in stable order.
+        """
+        cursor.execute(
+            "SELECT input_id FROM processing.job_inputs WHERE job_id=%s ORDER BY input_id",
+            (job["id"],),
+        )
+        return {**job, "input_ids": [row["input_id"] for row in cursor]}
 
     def read_job_inputs(
         self, identifier: str, attempt: str
@@ -1383,7 +1396,7 @@ class PostgresJobStore:
                 lease_seconds=self.limits.lease_seconds,
                 progress={},
             ):
-                return job
+                return self._claim_with_inputs(cursor, job)
             acknowledge_stopped_attempt(
                 cursor,
                 job_id=job["id"],

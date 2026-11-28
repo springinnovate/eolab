@@ -420,7 +420,7 @@ class ProcessingWorker:
             model.calculation if model else row["spec"]
         )
         directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
-        if row.get("has_input_payloads"):
+        if row.get("input_ids"):
             collections = await asyncio.to_thread(
                 self.jobs.read_job_inputs, row["id"], row["attempt_id"]
             )
