@@ -20,6 +20,26 @@ function fixture() {
     view.render(state); return {doc, view, state, actions};
 }
 
+test("run detail distinguishes queue wait, elapsed calculation and time to all results", () => {
+    const h = fixture(), start = new Date(Date.now() - 3200).toISOString();
+    const saved = job({createdAt: start, completionEstimate: {lowerSeconds: 18, upperSeconds: 34}});
+    Object.assign(h.state, {page: "run", selectedRun: saved.jobId, runs: [saved]});
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /In queue \d+ sec\. Once started, about 18–34 seconds until results are ready/);
+    saved.status = "running";
+    saved.progress = {phase: "preparing_rasters", completed: 8, total: 8, stages: [{startedAt: start}]};
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /Elapsed \d+ sec\. About 18–34 seconds until results are ready/);
+    h.view.run = null;
+    h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /18–34 seconds/);
+    saved.completionEstimate = {lowerSeconds: null, upperSeconds: null}; h.view.render(h.state);
+    assert.match(h.view.run.estimate.textContent, /Estimating time until results are ready…/);
+    for (const status of ["cancelling", "failed", "cancelled", "ready"]) {
+        saved.status = status; h.view.render(h.state); assert.equal(h.view.run.estimate.hidden, true);
+    }
+});
+
 test("checkbox model parameters submit independent boolean values", () => {
     const h = fixture();
     const recipe = {...model, inputs: {raster: {type: "raster", label: "Elevation raster (DEM)"}},

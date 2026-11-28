@@ -472,6 +472,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     if coverage in {"empty", "wrong_year", "no_references"}:
         return
     response = ModelJobResponse.model_validate(serialize_processing_job(ready))
+    assert response.completionEstimate is None
     assert response.result.name == "reference_similarity"
     assert response.result.preparedInputCoverage.model_dump() == {
         "requiredTiles": 6,

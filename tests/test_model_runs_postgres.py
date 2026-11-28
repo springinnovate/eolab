@@ -16,6 +16,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
@@ -2091,3 +2092,58 @@ def test_new_yaml_recipe_runs_through_http_storage_and_downloads(
     assert document.invocation.inputs == body["inputs"]
     if model_id == "raster-summary":
         assert result["rows"][0]["expression"] == "mean(a)"
+
+
+def test_stage_timing_history_only_reads_recent_eligible_owned_jobs(
+    store: PostgresJobStore,
+) -> None:
+    """Only completed runs for this owner, recipe and build contribute anonymous timings.
+
+    Args:
+        store: Migrated disposable PostgreSQL database with the production adapter.
+    """
+    now = datetime.now(timezone.utc)
+    build, recipe, operation = "build-1", "a" * 64, "habitat.condition.v1"
+    variants = (
+        ("owner", build, recipe, operation, "ready", None, 1),
+        ("other", build, recipe, operation, "ready", None, 1),
+        ("owner", "old", recipe, operation, "ready", None, 1),
+        ("owner", build, "b" * 64, operation, "ready", None, 1),
+        ("owner", build, recipe, "other", "ready", None, 1),
+        ("owner", build, recipe, operation, "failed", None, 1),
+        ("owner", build, recipe, operation, "ready", "deleted", 1),
+        ("owner", build, recipe, operation, "ready", None, -1),
+    )
+    with psycopg.connect(store.conninfo) as db:
+        for i, (owner, version, digest, op, status, subscriber, ttl) in enumerate(
+            variants
+        ):
+            identifier = uuid4().hex
+            grid = {"width": 12, "height": 13}
+            stages = [{"phase": "publishing_outputs", "endedAt": now.isoformat()}]
+            summary = {
+                "timingWork": {"number": i},
+                "grid": grid,
+                "operationId": op,
+                "model": {"definitionSha256": digest},
+                "timingHistory": ["private prior data"],
+            }
+            db.execute(
+                "INSERT INTO processing.jobs (id,expires_at,status,spec,reserved_bytes,summary,progress,operation) "
+                "VALUES (%s,%s,%s,%s,0,%s,%s,'model.run.v1')",
+                (
+                    identifier,
+                    now + timedelta(days=ttl),
+                    status,
+                    Jsonb({"applicationBuild": version}),
+                    Jsonb(summary),
+                    Jsonb({"stages": stages}),
+                ),
+            )
+            db.execute(
+                "INSERT INTO processing.job_subscribers (id,job_id,owner,request_key,status) VALUES (%s,%s,%s,%s,%s)",
+                (uuid4().hex, identifier, owner, uuid4().hex, subscriber),
+            )
+    assert store.recent_model_stage_timings("owner", operation, recipe, build) == [
+        {"work": {"number": 0}, "grid": grid, "stages": stages}
+    ]

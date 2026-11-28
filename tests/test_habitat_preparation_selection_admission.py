@@ -217,6 +217,7 @@ def admission_boundary(
     """
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     jobs = Mock(spec=JobStore)
+    jobs.recent_model_stage_timings.return_value = []
     jobs.find_request.side_effect = lambda owner, request_id: rows.get(
         (owner, request_id)
     )
@@ -303,6 +304,14 @@ def test_current_coverage_controls_admission_without_changing_captured_inputs(
         response = asyncio.run(boundary.service.submit_model_run(OWNER, request))
         assert response["status"] == "queued"
         plan = boundary.jobs.submit.call_args.args[2]
+        boundary.jobs.recent_model_stage_timings.assert_called_once()
+        assert plan.summary["timingWork"]["tiles"] == cached_tiles
+        assert plan.summary["timingWork"]["predictors"] == 20
+        assert plan.summary["timingWork"]["responses"] == 18
+        assert response["completionEstimate"] == {
+            "lowerSeconds": None,
+            "upperSeconds": None,
+        }
         queued = ModelRunSpec.model_validate(plan.specification).calculation
         assert isinstance(queued, QueuedHabitat)
         assert queued.request.catalogSelection == _selection()
@@ -413,6 +422,7 @@ def test_accepted_retry_recovers_before_membership_coverage_or_model_revalidatio
     boundary.service.model_registry.get.side_effect = AssertionError("recipe removed")
     recovered = asyncio.run(boundary.service.submit_model_run(OWNER, request))
     assert recovered == accepted
+    boundary.jobs.recent_model_stage_timings.assert_called_once()
     boundary.jobs.submit.assert_called_once()
     assert boundary.coverage.await_count == 1
     assert boundary.preparation_selections.contains.call_count == 1

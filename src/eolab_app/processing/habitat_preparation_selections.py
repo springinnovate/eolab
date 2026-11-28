@@ -310,8 +310,8 @@ async def get_habitat_preparation_coverage(
 async def validate_habitat_preparation_selection(
     request: HabitatRequest,
     dependencies: HabitatSubmissionDependencies | None,
-) -> None:
-    """Require a preparation selection with nonzero current coverage for Earth Engine runs.
+) -> "HabitatCacheCoverage | None":
+    """Check prepared input eligibility and return the coverage already inspected.
 
     Manual raster runs do not read preparation references or acquire the lock.
     Partial coverage is accepted and retains the existing NoData behavior;
@@ -322,6 +322,9 @@ async def validate_habitat_preparation_selection(
         request: Validated model calculation inputs.
         dependencies: Habitat-owned source, preparation references, cache and native
             read gate; None when composition has not configured the operation.
+
+    Returns:
+        Admitted current tile counts for prepared inputs, or None for manual rasters.
 
     Raises:
         ProcessingError: If Earth Engine inputs lack an eligible Catalog selection,
@@ -361,3 +364,4 @@ async def validate_habitat_preparation_selection(
             "No Ecosystem Condition inputs are prepared for this selection and year. Ask an administrator to prepare them before running the model.",
             409,
         )
+    return coverage

@@ -158,6 +158,14 @@ function validateJob(job) {
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
+        const estimate = job.completionEstimate;
+        if (estimate != null) {
+            const {lowerSeconds, upperSeconds} = estimate;
+            if (!(lowerSeconds === null && upperSeconds === null) &&
+                !(Number.isSafeInteger(lowerSeconds) && Number.isSafeInteger(upperSeconds) &&
+                    lowerSeconds >= 0 && upperSeconds >= 1 && lowerSeconds <= upperSeconds))
+                throw new Error("Processing returned an invalid model completion estimate.");
+        }
         validateModelArtifacts(job.artifacts, job);
         if (job.deletionUndo != null) {
             validateProcessingId(job.deletionUndo.deletionId);
