@@ -33,18 +33,18 @@ export function modelVectorSources(files, drawings) {
 }
 
 /** Replace local vector choices throughout an invocation with private source references.
- * Copies every selected layer before the first upload. Repeated uses share the same
+ * Copies every selected layer and drawing filter before the first capture. Repeated uses share the same
  * original features, while retaining each input's independently chosen predicate.
  * @param {Object} inputs Detached invocation inputs to bind before persisting or sending.
  * @param {(key:string)=>Object|null} readCollection Export the chosen layer's committed features only.
- * @param {(collection:Object)=>Promise<Object>} capture Store one complete GeoJSON source.
+ * @param {(document:Object)=>Promise<Object>} capture Keep original GeoJSON or a saved drawing revision for admission.
  * @param {(id:string)=>void} onCaptured Record every new reference for cleanup on failure.
  * @param {()=>boolean} isCurrent Whether the requesting setup is still active.
  * @return {Promise<void>} Resolves after binding the inputs or abandoning a superseded setup.
  * @throws {Error} If a chosen layer was removed or its capture fails.
  */
 export async function bindModelVectorInputs(inputs, readCollection, capture, onCaptured, isCurrent) {
-    const bindings = new Map();
+    const layers = new Map(), boundaries = new Map();
     /** Collect all vector selections, including group members, without interpreting recipe inputs.
      * @param {Object} value A node of the detached model invocation.
      * @return {void}
@@ -53,25 +53,34 @@ export async function bindModelVectorInputs(inputs, readCollection, capture, onC
         if (!value || typeof value !== "object") return;
         if (value.selection?.kind === "localVector") {
             const key = value.selection.key;
-            if (!bindings.has(key)) bindings.set(key, []);
-            bindings.get(key).push(value);
-        } else {
-            Object.values(value).forEach(collect);
+            if (!layers.has(key)) layers.set(key, []);
+            layers.get(key).push(value);
         }
+        if (value.kind === "drawing" && value.polygonArea?.drawingLayerId) {
+            const key = JSON.stringify(value.polygonArea);
+            if (!boundaries.has(key)) boundaries.set(key, []);
+            boundaries.get(key).push(value);
+        }
+        if (value.enabled === false && Array.isArray(value.rules)) return;
+        Object.values(value).forEach(collect);
     }
     collect(inputs);
-    if (!bindings.size) return;
-    const captures = Array.from(bindings, ([key, uses]) => {
+    const captures = Array.from(layers, ([key, uses]) => {
         const collection = readCollection(key);
         if (!collection) throw new Error("The chosen vector layer was removed. Choose another layer.");
-        return {uses, collection};
+        return {document: collection, bind: reference => {
+            for (const use of uses) use.selection = {kind: "capturedVector", reference, layerName: "features", filter: use.selection.filter};
+        }};
     });
-    for (const {uses, collection} of captures) {
-        const reference = await capture(collection);
+    for (const uses of boundaries.values()) {
+        captures.push({document: uses[0].polygonArea, bind: reference => {
+            for (const source of uses) source.polygonArea = reference;
+        }});
+    }
+    for (const {document, bind} of captures) {
+        const reference = await capture(document);
         onCaptured(reference.id);
         if (!isCurrent()) return;
-        for (const use of uses) {
-            use.selection = {kind: "capturedVector", reference, layerName: "features", filter: use.selection.filter};
-        }
+        bind(reference);
     }
 }

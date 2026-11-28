@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+from pydantic import TypeAdapter
 from eolab_app.drawings.models import DrawingFeatureCollection
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
@@ -55,6 +56,10 @@ from eolab_app.processing.ports import (
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.vector_input_models import (
+    bind_saved_drawing_filters,
+    private_vector_input,
+)
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
@@ -106,6 +111,7 @@ from eolab_app.catalog_selection import (
     ModelVectorSelection,
     DrawingReference,
     DrawingSelection,
+    SavedDrawingReference,
     referenced_layers,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
@@ -780,7 +786,7 @@ class ProcessingService:
         *,
         receive_inputs: (
             Callable[
-                [dict[str, ProcessingInputReference]],
+                [dict[str, JobInputReference]],
                 Awaitable[tuple[JobInputDocument, ...]],
             ]
             | None
@@ -824,8 +830,10 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
+        inputs = request_data["inputs"]
+        saved_filters = bind_saved_drawing_filters(inputs)
         calculation, invocation = build_model_calculation_request(
-            request, self.model_registry
+            request.model_copy(update={"inputs": inputs}), self.model_registry
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         if operation.before_queue is not None:
@@ -891,16 +899,27 @@ class ProcessingService:
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
         )
         selections = operation.vector_selections(calculation)
-        if receive_inputs is not None:
+        if saved_filters or receive_inputs is not None:
             references = {
-                source.reference.id: source.reference
+                reference.id: reference
                 for selection in selections.values()
                 for source in (selection, *referenced_layers(selection.filter))
-                if isinstance(source, CapturedVectorSelection)
+                if (reference := private_vector_input(source)) is not None
             }
-            prepared = replace(
-                prepared, input_documents=await receive_inputs(references)
+            documents = (
+                list(await receive_inputs(references))
+                if receive_inputs is not None
+                else []
             )
+            for key, saved_filter in saved_filters.items():
+                if key in references:
+                    documents.append(
+                        JobInputDocument(
+                            references[key],
+                            await self.capture_filter_polygons(owner, saved_filter),
+                        )
+                    )
+            prepared = replace(prepared, input_documents=tuple(documents))
         row = await self._submit_job(
             owner,
             request.requestId,
@@ -1031,6 +1050,31 @@ class ProcessingService:
             raise result
         return result
 
+    async def capture_filter_polygons(
+        self, owner: str, saved: SavedDrawingReference
+    ) -> bytes:
+        """Read an editor revision once and encode its selected polygons for the job.
+
+        Args:
+            owner: Browser's Processing session identity.
+            saved: Exact linked drawing revision and selected feature IDs.
+
+        Returns:
+            A private JSON document containing the accepted WGS84 polygons in source order.
+
+        Raises:
+            ProcessingError: If the editor cannot supply the requested revision or features.
+        """
+        if self.read_filter_drawing is None:
+            raise ProcessingError(
+                "drawing_unavailable", "The selected drawing is unavailable.", 409
+            )
+        polygons = await self.read_filter_drawing(owner, saved)
+        encoded = await asyncio.to_thread(
+            TypeAdapter(tuple[SummaryPolygon, ...]).dump_json, polygons
+        )
+        return b'{"polygons":' + encoded + b"}"
+
     async def _retain_vector_inputs(
         self,
         owner: str,
@@ -1057,13 +1101,10 @@ class ProcessingService:
         references = set(prepared.input_references)
         sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
         for selection in sources:
-            if isinstance(selection, CapturedVectorSelection):
-                reference = selection.reference
-                references.add(
-                    JobInputReference(
-                        reference.id, reference.sha256, "application/geo+json"
-                    )
-                )
+            reference = private_vector_input(selection)
+            if reference is not None:
+                references.add(reference)
+                continue
             if isinstance(selection, DrawingSelection) and selection.polygonArea:
                 drawing = selection.polygonArea
                 key = drawing.model_dump_json()

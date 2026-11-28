@@ -1,10 +1,105 @@
 """Capture original vector selections and the attributes chosen for model inputs."""
 
-from typing import Annotated
+from hashlib import sha256
+from typing import Annotated, Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from eolab_app.catalog_selection import ModelVectorSelection
+from eolab_app.catalog_selection import (
+    CapturedVectorSelection,
+    DrawingSelection,
+    ModelVectorSelection,
+    SavedDrawingReference,
+)
+from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.processing.models import JobInputReference, ProcessingError
+
+
+def private_vector_input(
+    selection: ModelVectorSelection | DrawingSelection,
+) -> JobInputReference | None:
+    """Identify the private input this source needs for execution and duplication.
+
+    Args:
+        selection: A model vector or a polygon view referenced by its predicate.
+
+    Returns:
+        An input ID with its checksum, document format and staging lifetime,
+        or None when another source authority supplies this selection.
+    """
+    if isinstance(selection, CapturedVectorSelection):
+        return JobInputReference(
+            selection.reference.id, selection.reference.sha256, "application/geo+json"
+        )
+    if isinstance(selection, DrawingSelection) and isinstance(
+        selection.polygonArea, PolygonAreaReference
+    ):
+        return JobInputReference(
+            selection.polygonArea.id,
+            selection.polygonArea.sha256,
+            "application/json",
+            consume_staging=False,
+        )
+    return None
+
+
+def bind_saved_drawing_filters(
+    inputs: dict[str, Any],
+) -> dict[str, SavedDrawingReference]:
+    """Give inline editor revisions private input IDs before saving a model invocation.
+
+    Args:
+        inputs: Detached model inputs. Active drawing conditions are updated in place.
+
+    Returns:
+        The original revision and feature IDs to read once for each new input.
+        A resubmitted invocation that already has private IDs needs no editor reads.
+
+    Raises:
+        ProcessingError: If an inline saved drawing revision is invalid.
+    """
+    references: dict[SavedDrawingReference, PolygonAreaReference] = {}
+
+    def visit(value: Any) -> None:
+        """Replace saved drawing references in active predicates of this input subtree.
+
+        Args:
+            value: Detached JSON node from the submitted model inputs.
+        """
+        if isinstance(value, list):
+            for member in value:
+                visit(member)
+        if not isinstance(value, dict) or (
+            value.get("enabled") is False and "rules" in value
+        ):
+            return
+        source = value.get("source")
+        if (
+            value.get("operator") == "intersects"
+            and isinstance(source, dict)
+            and source.get("kind") == "drawing"
+        ):
+            area = source.get("polygonArea")
+            if isinstance(area, dict) and "drawingLayerId" in area:
+                try:
+                    saved = SavedDrawingReference.model_validate(area)
+                except ValueError as error:
+                    raise ProcessingError(
+                        "invalid_model_inputs", "Choose a valid saved drawing revision."
+                    ) from error
+                if saved not in references:
+                    references[saved] = PolygonAreaReference(
+                        id=uuid4().hex,
+                        sha256=sha256(saved.model_dump_json().encode()).hexdigest(),
+                    )
+                source["polygonArea"] = references[saved].model_dump()
+        for child in value.values():
+            visit(child)
+
+    visit(inputs)
+    return {reference.id: saved for saved, reference in references.items()}
+
 
 class VectorFieldSelectionRow(BaseModel):
     """Capture one row's attribute names and recipe-defined choice values.

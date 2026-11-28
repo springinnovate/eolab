@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from importlib.resources import files
+from pathlib import Path
 import json
 from typing import Any, Iterator
 from uuid import uuid4
@@ -264,7 +265,10 @@ class PostgresJobStore:
                 413,
             )
         with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
+            cursor.execute(
+                "DELETE FROM processing.inputs i WHERE expires_at<=now() "
+                "AND NOT EXISTS (SELECT FROM processing.job_inputs r WHERE r.input_id=i.id)"
+            )
             cursor.execute(
                 "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s) AS owned, coalesce(sum(bytes),0) AS bytes FROM processing.inputs WHERE expires_at>now()",
                 (owner,),
@@ -321,7 +325,7 @@ class PostgresJobStore:
         return row["payload"]
 
     def discard_input(self, owner: str, identifier: str) -> None:
-        """Release an input after deselection; accepted jobs keep their own copy.
+        """Release the session's staging access while accepted jobs keep the input.
 
         Args:
             owner: Current browser-session hash.
@@ -332,7 +336,12 @@ class PostgresJobStore:
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
-                "DELETE FROM processing.inputs WHERE id=%s AND owner=%s AND expires_at IS NOT NULL",
+                "DELETE FROM processing.inputs i WHERE id=%s AND owner=%s AND expires_at IS NOT NULL "
+                "AND NOT EXISTS (SELECT FROM processing.job_inputs r WHERE r.input_id=i.id)",
+                (identifier, owner),
+            )
+            cursor.execute(
+                "UPDATE processing.inputs SET expires_at=NULL WHERE id=%s AND owner=%s AND expires_at IS NOT NULL",
                 (identifier, owner),
             )
 
@@ -587,8 +596,9 @@ class PostgresJobStore:
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
         private_inputs: list[tuple[str, str]] = []
+        consumed_staging = set()
         documents = {
-            document.reference: document.path
+            document.reference: document.content
             for item in submissions
             if isinstance(item.prepared, PreparedJobPlan)
             for document in item.prepared.input_documents
@@ -598,7 +608,8 @@ class PostgresJobStore:
             # Transfer each document before taking the shared queue lock. Other
             # transactions see neither the files nor the new job until commit.
             for reference in sorted(documents, key=lambda value: value.id):
-                path = documents[reference]
+                content = documents[reference]
+                data = content.read_bytes() if isinstance(content, Path) else content
                 cursor.execute(
                     "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) "
                     "VALUES (%s,%s,%s,%s::jsonb,%s,NULL,%s) ON CONFLICT (id) DO NOTHING RETURNING id",
@@ -606,11 +617,12 @@ class PostgresJobStore:
                         reference.id,
                         owner,
                         reference.sha256,
-                        path.read_text(encoding="utf-8"),
-                        path.stat().st_size,
+                        data.decode("utf-8"),
+                        len(data),
                         reference.media_type,
                     ),
                 )
+                del data
                 if cursor.fetchone() is not None:
                     inserted.add(reference)
             if documents:
@@ -688,6 +700,11 @@ class PostgresJobStore:
                     private_inputs.extend(
                         (job_id, reference.id)
                         for reference in expected.input_references
+                    )
+                    consumed_staging.update(
+                        ref.id
+                        for ref in expected.input_references
+                        if ref.consume_staging
                     )
                     retained_seconds = (
                         max(
@@ -774,9 +791,10 @@ class PostgresJobStore:
                         "INSERT INTO processing.job_inputs(job_id,input_id) VALUES (%s,%s)",
                         private_inputs,
                     )
+                if consumed_staging:
                     cursor.execute(
                         "UPDATE processing.inputs SET expires_at=NULL WHERE id=ANY(%s) AND expires_at IS NOT NULL",
-                        ([input_id for _, input_id in private_inputs],),
+                        (list(consumed_staging),),
                     )
                 unused = {ref.id for ref in inserted} - {
                     input_id for _, input_id in private_inputs

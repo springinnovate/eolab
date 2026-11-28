@@ -1,7 +1,7 @@
 """Receive a compact model invocation and its input documents in one request."""
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from hashlib import sha256
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from eolab_app.drawings.models import DrawingFeatureCollection
-from eolab_app.polygon_areas import ProcessingInputReference
+from eolab_app.catalog_selection import SavedDrawingReference
 from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.models import (
     MAX_STAGED_INPUT_BYTES,
@@ -55,10 +55,10 @@ async def input_lines(chunks: AsyncIterator[bytes]) -> AsyncGenerator[bytes, Non
         yield bytes(line)
 
 
-def write_drawing(
-    body: bytes, reference: ProcessingInputReference, path: Path
-) -> JobInputDocument:
-    """Validate an attached drawing and keep its JSON until this job is admitted.
+def prepare_drawing(
+    body: bytes, reference: JobInputReference, path: Path
+) -> JobInputDocument | SavedDrawingReference:
+    """Write original drawing features or identify the editor revision to read.
 
     Args:
         body: Original document bytes, excluding the newline delimiter.
@@ -66,7 +66,7 @@ def write_drawing(
         path: Private file assigned by the request handler.
 
     Returns:
-        The validated source for the job store's admission transaction.
+        The validated features on disk, or a revision requiring an authorized editor read.
 
     Raises:
         HTTPException: The checksum, geometry or normalized input size is invalid.
@@ -77,6 +77,8 @@ def write_drawing(
             422, "The attached drawing does not match the selected input."
         )
     try:
+        if reference.media_type == "application/json":
+            return SavedDrawingReference.model_validate_json(body)
         document = DrawingFeatureCollection.normalize_document(body).encode("utf-8")
     except ValidationError as error:
         raise HTTPException(
@@ -86,23 +88,28 @@ def write_drawing(
     if len(document) > MAX_STAGED_INPUT_BYTES:
         raise HTTPException(413, "The drawing exceeds the private input size limit.")
     path.write_bytes(document)
-    return JobInputDocument(
-        JobInputReference(reference.id, reference.sha256, "application/geo+json"), path
-    )
+    return JobInputDocument(reference, path)
 
 
 class ModelInputStream:
     """Read source files only for private vector inputs declared by this model run."""
 
-    def __init__(self, chunks: AsyncIterator[bytes], directory: Path) -> None:
+    def __init__(
+        self,
+        chunks: AsyncIterator[bytes],
+        directory: Path,
+        capture_filter: Callable[[SavedDrawingReference], Awaitable[bytes]],
+    ) -> None:
         """Bind the request stream to its private temporary directory.
 
         Args:
             chunks: Incoming newline-delimited JSON.
             directory: Directory owned and removed by the HTTP request.
+            capture_filter: Read the selected polygons at the requested editor revision.
         """
         self.lines = input_lines(chunks)
         self.directory = directory
+        self.capture_filter = capture_filter
 
     async def read_invocation(self) -> ModelRunRequest:
         """Return the compact invocation before reading its input attachments.
@@ -121,7 +128,7 @@ class ModelInputStream:
             ) from error
 
     async def receive_inputs(
-        self, references: dict[str, ProcessingInputReference]
+        self, references: dict[str, JobInputReference]
     ) -> tuple[JobInputDocument, ...]:
         """Read each declared attachment exactly once after the model is validated.
 
@@ -150,12 +157,16 @@ class ModelInputStream:
         documents = []
         for index, key in enumerate(ids):
             body = await anext(self.lines, b"")
-            documents.append(
-                await asyncio.to_thread(
-                    write_drawing, body, references[key], self.directory / str(index)
-                )
-            )
+            path = self.directory / str(index)
+            reference = references[key]
+            document = await asyncio.to_thread(prepare_drawing, body, reference, path)
             del body
+            if isinstance(document, SavedDrawingReference):
+                polygons = await self.capture_filter(document)
+                await asyncio.to_thread(path.write_bytes, polygons)
+                del polygons
+                document = JobInputDocument(reference, path)
+            documents.append(document)
         if await anext(self.lines, None) is not None:
             raise HTTPException(422, "The submission contains an unexpected drawing.")
         return tuple(documents)

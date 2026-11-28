@@ -81,6 +81,8 @@ export class PendingModelInputs {
         function collect(value) {
             if (!value || typeof value !== "object") return;
             if (value.kind === "capturedVector") ids.add(value.reference.id);
+            if (value.kind === "drawing" && value.polygonArea?.id) ids.add(value.polygonArea.id);
+            if (value.enabled === false && Array.isArray(value.rules)) return;
             Object.values(value).forEach(collect);
         }
         collect(submission.inputs);

@@ -18,21 +18,22 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
     ModelVectorSelection,
     DrawingSelection,
+    VectorFilter,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.bounded_vector import resolve_vector_file_selection
-from eolab_app.polygon_areas import SummaryPolygon
+from eolab_app.polygon_areas import PolygonAreaReference, SummaryPolygon
 from eolab_app.feature_intersection import bind_intersections
 
 
 def write_captured_vector_inputs(
     directory: Path, collections: Mapping[str, dict[str, Any]]
 ) -> dict[str, Path]:
-    """Write each retained GeoJSON collection to a private WGS84 GeoPackage.
+    """Write each retained drawing layer or polygon boundary to a private WGS84 GeoPackage.
 
     Args:
         directory: Private attempt directory, cleaned after cancellation or publication.
-        collections: Authorized GeoJSON sources keyed by the original input ID.
+        collections: Authorized feature collections or polygon lists keyed by input ID.
 
     Returns:
         Original reference keys mapped to files available for the duration of this attempt.
@@ -45,6 +46,21 @@ def write_captured_vector_inputs(
     paths = {}
     for index, (key, collection) in enumerate(collections.items()):
         path = directory / f"input-vector-{index}.gpkg"
+        if "features" in collection:
+            fields = {"name": "str", "note": "str", "featureId": "str"}
+            records = (
+                {
+                    "geometry": feature["geometry"],
+                    "properties": {**feature["properties"], "featureId": feature["id"]},
+                }
+                for feature in collection["features"]
+            )
+        else:
+            fields = {}
+            records = (
+                {"geometry": polygon, "properties": {}}
+                for polygon in collection["polygons"]
+            )
         with fiona.open(
             path,
             "w",
@@ -53,16 +69,10 @@ def write_captured_vector_inputs(
             crs="EPSG:4326",
             schema={
                 "geometry": "Polygon",
-                "properties": {"name": "str", "note": "str", "featureId": "str"},
+                "properties": fields,
             },
         ) as dataset:
-            dataset.writerecords(
-                {
-                    "geometry": feature["geometry"],
-                    "properties": {**feature["properties"], "featureId": feature["id"]},
-                }
-                for feature in collection["features"]
-            )
+            dataset.writerecords(records)
         paths[key] = path
     return paths
 
@@ -177,6 +187,18 @@ class RetainedVectorSelectionReader:
         if isinstance(source, DrawingSelection):
             if source.polygonArea is None:
                 return ()
+            if (
+                isinstance(source.polygonArea, PolygonAreaReference)
+                and source.polygonArea.id in self.captured_files
+            ):
+                return await self._resolve_original(
+                    CapturedVectorSelection(
+                        kind="capturedVector",
+                        reference=source.polygonArea,
+                        layerName="features",
+                        filter=VectorFilter(),
+                    )
+                )
             try:
                 polygons = self.drawings[source.polygonArea.model_dump_json()]
             except KeyError as error:

@@ -43,11 +43,14 @@ class JobInputReference:
         id: Input identifier returned to its owner.
         sha256: Expected checksum supplied by the source producer.
         media_type: Input format understood by the operation.
+        consume_staging: Transfer the staged input to the job. False preserves
+            an independently held staging reference until its owner releases it.
     """
 
     id: str
     sha256: str
     media_type: str
+    consume_staging: bool = True
 
 
 @dataclass(frozen=True)
@@ -56,11 +59,11 @@ class JobInputDocument:
 
     Attributes:
         reference: Opaque ID, checksum of the submitted document and required format.
-        path: Request-owned temporary file containing compact normalized JSON.
+        content: Compact normalized JSON, held in memory or in a request-owned file.
     """
 
     reference: JobInputReference
-    path: Path
+    content: bytes | Path
 
 
 @dataclass(frozen=True)

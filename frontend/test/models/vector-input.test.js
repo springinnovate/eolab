@@ -164,6 +164,29 @@ test("a scalar role can submit either real editor text field through an ordinary
     }
 });
 
+test("shared drawing intersections bind once across local and file inputs and reopen without the editor", async () => {
+    const revision = {drawingLayerId: crypto.randomUUID(), revision: 1, featureIds: Array.from({length: 450}, () => crypto.randomUUID())};
+    const filter = {enabled: true, match: "all", rules: [{operator: "intersects", layerId: crypto.randomUUID(),
+        source: {kind: "drawing", polygonArea: revision, filter: predicate}}]};
+    const inputs = structuredClone({first: {selection: {kind: "localVector", key: "fields", filter}}, second: {selection: {...selection, filter}}});
+    const documents = [], released = [];
+    const capture = async document => {
+        documents.push(document);
+        return {id: String(documents.length).repeat(32), sha256: "a".repeat(64)};
+    };
+    await bindModelVectorInputs(inputs, () => ({type: "FeatureCollection", features: []}), capture, id => released.push(id), () => true);
+    assert.equal(documents.length, 2);
+    assert.equal(released.length, 2);
+    assert.deepEqual(documents.find(doc => doc.featureIds), revision);
+    assert.ok(JSON.stringify(inputs).length < 16384);
+    const bound = inputs.first.selection.filter.rules[0].source;
+    assert.equal(bound.kind, "drawing");
+    assert.deepEqual(bound.filter, predicate);
+    assert.deepEqual(bound.polygonArea, inputs.second.selection.filter.rules[0].source.polygonArea);
+    assert.deepEqual(Object.keys(bound.polygonArea).sort(), ["id", "sha256"]);
+    await bindModelVectorInputs(inputs, assert.fail, assert.fail, assert.fail, () => true);
+});
+
 test("multiple configured vector inputs retain independent source, field and filter choices", () => {
     const recipe = recipeFor(); recipe.inputs.reference = alternateDefinition;
     const draft = createModelDraft(recipe, {vectors: [source]}, "draft");

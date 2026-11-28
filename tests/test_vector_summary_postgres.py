@@ -15,6 +15,9 @@ from rasterio.features import geometry_mask
 import psycopg
 import pytest
 
+from eolab_app.catalog_selection import DrawingReference, SavedDrawingReference
+from eolab_app.polygon_areas import SummaryPolygon, read_polygon_area_input
+from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
@@ -341,6 +344,154 @@ def test_model_admits_a_group_without_consuming_shared_staging(
             "SELECT count(*) AS count FROM processing.inputs WHERE expires_at IS NOT NULL"
         )
         assert cursor.fetchone()["count"] == 1
+
+
+@pytest.mark.parametrize("origin", ["device", "saved", "attachment"])
+def test_duplicate_preserves_drawing_intersection(
+    model_boundary: Any, store: PostgresJobStore, origin: str
+) -> None:
+    """Duplicate the actual clip after the map releases or revises its filter boundary.
+
+    Args:
+        model_boundary: Real HTTP admission and native worker.
+        store: Disposable PostgreSQL input and job store.
+        origin: Device polygon area, scripted revision, or browser-attached feature IDs.
+    """
+    client, worker, service = model_boundary
+    geometry = rectangle(0.125, 9.125, 0.325, 9.325)
+    polygon = SummaryPolygon.model_validate(geometry)
+    revision = 1
+    selected = SavedDrawingReference(
+        drawingLayerId=uuid4(),
+        revision=revision,
+        featureIds=tuple(
+            str(uuid4()) for _ in range(450 if origin == "attachment" else 1)
+        ),
+    )
+
+    async def read_filter(
+        owner: str, reference: DrawingReference
+    ) -> tuple[SummaryPolygon, ...]:
+        """Read the current editor revision or the device's staged polygons.
+
+        Args:
+            owner: Browser session holding the map input.
+            reference: The revision and features, or a private polygon area.
+
+        Returns:
+            Selected original polygons in feature order.
+
+        Raises:
+            ProcessingError: The selection changed or staging access expired.
+        """
+        if isinstance(reference, SavedDrawingReference):
+            if reference != selected or reference.revision != revision:
+                raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+            return (polygon,) * len(reference.featureIds)
+        return (
+            await read_polygon_area_input(store.get_input, owner, reference)
+        ).polygons
+
+    service.read_filter_drawing = read_filter
+    target = capture_drawing(client, geometry)
+    saved_doc = selected.model_dump_json().encode()
+    if origin == "device":
+        area = client.post(
+            "/api/processing/polygon-areas",
+            json={"polygons": [geometry]},
+            headers=HEADERS,
+        ).json()["polygonArea"]
+    elif origin == "saved":
+        area = selected.model_dump(mode="json")
+    else:
+        assert len(saved_doc) > 16 * 1024
+        area = {"id": uuid4().hex, "sha256": hashlib.sha256(saved_doc).hexdigest()}
+    target["filter"] = {
+        "rules": [
+            {
+                "operator": "intersects",
+                "layerId": str(uuid4()),
+                "source": {"kind": "drawing", "polygonArea": area},
+            }
+        ]
+    }
+    request = model_request(
+        client,
+        "raster-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {"kind": "catalogSelection", "selection": target},
+        },
+    )
+    if origin == "attachment":
+        body = b"\n".join(
+            [json.dumps(request).encode(), json.dumps([area["id"]]).encode(), saved_doc]
+        )
+        reply = client.post(
+            "/api/processing/model-runs/with-inputs",
+            content=body,
+            headers={**HEADERS, "Content-Type": "application/x-ndjson"},
+        )
+        assert reply.status_code == 202, reply.text
+        job = reply.json()
+    else:
+        job = submit(client, request)
+    url = "/api/processing/jobs/" + job["jobId"]
+    saved = client.get(url + "/invocation").json()["inputs"]
+    captured = saved["area"]["selection"]["filter"]["rules"][0]["source"]["polygonArea"]
+    assert set(captured) == {"id", "sha256"}
+    revision += 1
+    if origin == "device":
+        owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+        assert store.get_input(owner, area["id"], area["sha256"], "application/json")[
+            "polygons"
+        ]
+        assert (
+            client.delete(
+                "/api/processing/polygon-areas/" + area["id"], headers=HEADERS
+            ).status_code
+            == 200
+        )
+        with pytest.raises(ProcessingError):
+            store.get_input(owner, area["id"], area["sha256"], "application/json")
+    elif origin == "saved":
+        stale = client.post(
+            "/api/processing/model-runs",
+            json={**request, "requestId": uuid4().hex},
+            headers=HEADERS,
+        )
+        assert stale.status_code == 409, stale.text
+    assert submit(client, request)["jobId"] == job["jobId"]
+    duplicate_request = {**request, "inputs": saved, "requestId": uuid4().hex}
+    with TestClient(client.app, base_url="https://testserver") as other:
+        assert (
+            other.post(
+                "/api/processing/model-runs", json=duplicate_request, headers=HEADERS
+            ).status_code
+            == 409
+        )
+    copy = submit(client, duplicate_request)
+    results = []
+    for run in (job, copy):
+        assert client.portal.call(worker.run_once)
+        ready = client.get("/api/processing/jobs/" + run["jobId"]).json()
+        assert ready["status"] == "ready", ready
+        with (
+            rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as file,
+            file.open() as raster,
+        ):
+            numpy.testing.assert_array_equal(
+                raster.read_masks(1) > 0,
+                geometry_mask(
+                    [geometry],
+                    raster.shape,
+                    raster.transform,
+                    all_touched=True,
+                    invert=True,
+                ),
+            )
+            results.append(raster.read(1))
+    numpy.testing.assert_array_equal(*results)
 
 
 def test_clip_pixels_match_for_all_four_vector_sources(
