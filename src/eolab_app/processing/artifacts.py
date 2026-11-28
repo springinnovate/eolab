@@ -10,7 +10,7 @@ import stat
 from threading import Event
 import time
 from typing import Any
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from uuid import uuid4
 from pydantic import TypeAdapter, ValidationError
 
@@ -59,9 +59,21 @@ def write_progress(
     )
     if details is not None:
         snapshot["details"] = dict(details)
-    temporary = directory / "progress.tmp"
+    write_progress_snapshot(directory / "progress.json", snapshot)
+
+
+def write_progress_snapshot(destination: Path, snapshot: dict[str, Any]) -> None:
+    """Atomically publish a small snapshot from a single sequential progress writer.
+
+    Args:
+        destination: Private progress file within the attempt.
+        snapshot: Bounded, path-free measurements from the operation.
+
+    Raises:
+        OSError: If writing or replacing the snapshot fails.
+    """
+    temporary = destination.with_suffix(".tmp")
     temporary.write_text(json.dumps(snapshot))
-    destination = directory / "progress.json"
     for delay in (0.01, 0.02, 0.04, 0.08):
         try:
             temporary.replace(destination)
@@ -161,6 +173,8 @@ class LocalJobArtifacts:
         attempt: str,
         declarations: tuple[FileDeclaration, ...],
         cancelled: Event,
+        *,
+        on_verified: Callable[[int], None] | None = None,
     ) -> ArtifactManifest:
         """Verify declared files, remove scratch, and atomically publish an inventory.
 
@@ -173,6 +187,7 @@ class LocalJobArtifacts:
             attempt: Fenced attempt whose native operation completed successfully.
             declarations: Complete files approved by the owning application.
             cancelled: Signal set when the worker loses its attempt or is cancelled.
+            on_verified: Optional notification after each declared file passes verification.
 
         Returns:
             Immutable file inventory and exact retained bytes, including manifest.json.
@@ -187,7 +202,15 @@ class LocalJobArtifacts:
             raise ProcessingError("invalid_artifact", "Invalid result file count.", 500)
         names = [item.storage_name.casefold() for item in declarations]
         if len(set(names)) != len(names) or any(
-            name in {"manifest.json", "progress.json", "progress.tmp"} for name in names
+            name
+            in {
+                "manifest.json",
+                "progress.json",
+                "progress.tmp",
+                "stage-progress.json",
+                "stage-progress.tmp",
+            }
+            for name in names
         ):
             raise ProcessingError(
                 "invalid_artifact", "Result file names conflict.", 500
@@ -242,6 +265,8 @@ class LocalJobArtifacts:
                     sha256=digest.hexdigest(),
                 )
             )
+            if on_verified is not None:
+                on_verified(len(files))
         entries = tuple(files)
         inventory = encode_manifest_files(entries)
         retained_bytes = sum(item.size for item in entries) + len(inventory)
@@ -365,12 +390,19 @@ class LocalJobArtifacts:
             Latest complete phase/progress record, or an empty mapping.
         """
         try:
-            path = self._directory(attempt, False) / "progress.json"
-            if path.stat().st_size > 1024:
-                return {}
-            return json.loads(path.read_text())
+            root = self._directory(attempt, False)
         except (OSError, ValueError):
             return {}
+        for name, maximum in (("stage-progress.json", 16384), ("progress.json", 1024)):
+            try:
+                with (root / name).open("rb") as stream:
+                    data = stream.read(maximum + 1)
+                return json.loads(data) if len(data) <= maximum else {}
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError):
+                return {}
+        return {}
 
     def remove(self, attempt: str) -> None:
         """Remove only one verified attempt after native and transfer leases end.

@@ -114,6 +114,19 @@ function validateExecution(execution) {
     }
 }
 
+/** Validate the measured timestamps, counts and human-readable text of a recorded stage.
+ * @param {Object} stage Stage received from a Processing job snapshot.
+ * @return {boolean} Whether it can be presented as an ordered timing record.
+ */
+function validTimedStage(stage) {
+    if (!stage || typeof stage.phase !== "string" || !stage.phase ||
+        stage.description != null && (typeof stage.description !== "string" || !stage.description.trim() || [...stage.description].length > 200)) return false;
+    const start = Date.parse(stage.startedAt), last = Date.parse(stage.lastProgressAt);
+    return Number.isFinite(start) && last >= start && (stage.endedAt == null || Date.parse(stage.endedAt) >= last) &&
+        (stage.completed == null && stage.total == null || Number.isSafeInteger(stage.completed) && Number.isSafeInteger(stage.total) &&
+            stage.completed >= 0 && stage.completed <= stage.total && typeof stage.unit === "string" && stage.unit.length > 0);
+}
+
 /** Check a job's status, progress, results and download links before displaying it.
  * Model stage descriptions are optional literal text: when present, they must
  * contain non-whitespace text and at most 200 Unicode code points.
@@ -127,6 +140,8 @@ function validateJob(job) {
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.operation === "model.run.v1") {
         validateModelIdentity(job.model);
+        if (job.progress.stages != null && (!Array.isArray(job.progress.stages) || !job.progress.stages.every(validTimedStage)))
+            throw new Error("Processing returned invalid model stage timings.");
         const description = job.progress.description;
         if (description != null && (typeof description !== "string" || !description.trim() || [...description].length > 200))
             throw new Error("Processing returned an invalid model progress description.");

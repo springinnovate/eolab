@@ -46,6 +46,51 @@ def model_row(operation: str, progress: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def test_model_snapshot_retains_stage_times_and_completed_work() -> None:
+    """Keep a completed fit and the active verification stage across status reads."""
+    start = "2026-10-08T00:00:00+00:00"
+    sample = "2026-10-08T00:00:02+00:00"
+    verification = "2026-10-08T00:00:03+00:00"
+    stages = [
+        {
+            "phase": "Fitting response models",
+            "startedAt": start,
+            "lastProgressAt": sample,
+            "endedAt": verification,
+            "completed": 6,
+            "total": 6,
+            "unit": "fits",
+        },
+        {
+            "phase": "publishing_outputs",
+            "startedAt": verification,
+            "lastProgressAt": verification,
+            "endedAt": None,
+        },
+    ]
+    row = model_row(
+        "habitat.condition.v1", {"phase": "publishing_outputs", "stages": stages}
+    )
+    snapshot = ModelJobResponse.model_validate(serialize_model_job(row)).progress
+    assert snapshot.description == "Verifying and publishing output files"
+    assert [stage.phase for stage in snapshot.stages] == [
+        record["phase"] for record in stages
+    ]
+    fit, publishing = snapshot.stages
+    assert fit.completed == fit.total == 6 and fit.unit == "fits"
+    assert (
+        fit.lastProgressAt.isoformat() == sample and fit.endedAt == publishing.startedAt
+    )
+    assert publishing.endedAt is None
+    row.update(
+        status="failed",
+        error={"code": "processing_failed", "detail": "Could not publish"},
+    )
+    stopped = ModelJobResponse.model_validate(serialize_model_job(row))
+    assert stopped.progress.description is None
+    assert stopped.progress.stages == snapshot.stages
+
+
 @pytest.mark.parametrize("phase", ["counting_habitat", "measuring_regions"])
 def test_registered_operation_supplies_unfamiliar_stage_description(
     monkeypatch: pytest.MonkeyPatch, phase: str
@@ -79,6 +124,7 @@ def test_registered_operation_supplies_unfamiliar_stage_description(
     assert response.progress.model_dump() == {
         "phase": phase,
         "description": "Measuring habitat",
+        "stages": (),
         "completed": 1,
         "total": 3,
         "unit": "regions",

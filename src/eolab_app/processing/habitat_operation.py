@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 from eolab_app.bounded_vector import summary_process
+from eolab_app.processing.stage_progress import stage_snapshot, stage_start
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
@@ -224,6 +225,9 @@ async def prepare_habitat(
             be calculated.
         SelectionUnavailableError: If a selected vector is unavailable.
     """
+    await context.report_progress(
+        stage_snapshot([stage_start("preparing_habitat_grid")])
+    )
     request = queued.request
     sources = await resolve_habitat_sources(context, request)
     if queued.polygonArea is not None:

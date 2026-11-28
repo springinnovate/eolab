@@ -328,7 +328,11 @@ def _copy_habitat_tile_bands(
 
 @contextmanager
 def prepare_habitat_band_views(
-    tiles: HabitatTiles, directory: Path, band_names: tuple[str, ...]
+    tiles: HabitatTiles,
+    directory: Path,
+    band_names: tuple[str, ...],
+    *,
+    on_tile: Callable[[int], None] | None = None,
 ) -> Iterator[dict[str, Path]]:
     """Expose selected cache bands as job-local single-band raster mosaics.
 
@@ -340,6 +344,7 @@ def prepare_habitat_band_views(
         tiles: Complete, aligned files admitted by Habitat acquisition.
         directory: Private attempt directory owned by the native supervisor.
         band_names: Selected names from the admitted tile band definitions.
+        on_tile: Optional notification with the number of completed tile copies.
 
     Yields:
         VRT paths keyed by scientific band name, valid inside this context.
@@ -361,6 +366,8 @@ def prepare_habitat_band_views(
             selected_tile = root / f"tile-{tile_number}.tif"
             _copy_habitat_tile_bands(source, band_indexes, selected_tile)
             selected_tiles.append(str(selected_tile))
+            if on_tile is not None:
+                on_tile(len(selected_tiles))
 
         paths = {}
         with (

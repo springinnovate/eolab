@@ -206,6 +206,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         input_adapters: Additional operation-owned types accepted by selected inputs.
         requires_raster_grid: Whether preparation must record a raster calculation
             grid. Vector-only operations set False and retain their own policy.
+        timed_stages: Retain the operation's measured stage history through publication.
         progress_descriptions: Native phase names and their plain user-facing
             descriptions, each containing non-whitespace text up to 200 characters.
             Missing phases use the client's generic running-state description.
@@ -272,6 +273,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
     progress_descriptions: tuple[tuple[str, str], ...] = ()
+    timed_stages: bool = False
     before_queue: Callable[[Request, object | None], Awaitable[None]] | None = None
 
     def parse_specification(
@@ -528,8 +530,21 @@ OPERATIONS = MappingProxyType(
                     ("optional_raster", TypeAdapter(RasterSourceReference | None)),
                     ("raster_preparation", TypeAdapter(HabitatPreparation)),
                 ),
+                timed_stages=True,
                 progress_descriptions=(
+                    ("preparing", "Checking access to model inputs"),
+                    (
+                        "preparing_habitat_grid",
+                        "Reading the analysis area and building the model grid",
+                    ),
+                    ("opening_habitat_inputs", "Opening the selected input rasters"),
                     ("preparing_rasters", "Preparing model rasters"),
+                    ("preparing_habitat_references", "Preparing reference sites"),
+                    (
+                        "finalizing_habitat_outputs",
+                        "Closing model rasters and packaging diagnostics",
+                    ),
+                    ("publishing_outputs", "Verifying and publishing output files"),
                 )
                 + tuple(
                     (phase, phase)

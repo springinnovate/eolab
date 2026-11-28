@@ -612,16 +612,23 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             total=progress["totalBlocks"],
             unit="blocks",
         )
-    if status == "running" and isinstance(measured["phase"], str):
+    stages = progress.get("stages", [])
+    if stages or (status == "running" and isinstance(measured["phase"], str)):
+        descriptions: dict[str, str] = {}
         try:
             operation = get_model_operation(summary["operationId"])
         except ProcessingError as error:
             if error.code != "unsupported_model_operation":
                 raise
         else:
-            measured["description"] = dict(operation.progress_descriptions).get(
-                measured["phase"]
-            )
+            descriptions = dict(operation.progress_descriptions)
+        if status == "running":
+            measured["description"] = descriptions.get(measured["phase"])
+        stages = [
+            {**stage, "description": descriptions.get(stage["phase"])}
+            for stage in stages
+        ]
+    measured["stages"] = stages
     identifier = row["id"]
     result = None
     if artifact is not None:

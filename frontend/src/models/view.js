@@ -52,6 +52,33 @@ function describeModelRaster(source, runs) {
     return `${run?.label ?? "Previous run"} · ${file?.displayName ?? file?.label ?? source.artifactId}`;
 }
 
+/** Present the retained measurements for one run without changing its live status.
+ * @param {HTMLElement} details Disclosure for measured stages.
+ * @param {HTMLOListElement} list Ordered measurements belonging to this run.
+ * @param {Object|undefined} job Owned job snapshot with optional timed stages.
+ * @return {void}
+ */
+function renderStageTimings(details, list, job) {
+    const stages = job?.progress.stages ?? [];
+    details.hidden = !stages.length;
+    const rows = stages.map(stage => {
+        const end = stage.endedAt ?? (job.status === "running" ? Date.now() : stage.lastProgressAt);
+        const seconds = Math.max(0, Math.floor((new Date(end) - new Date(stage.startedAt)) / 1000));
+        const duration = seconds >= 60 ? `${Math.floor(seconds / 60)} min ${seconds % 60} sec` : `${seconds} sec`;
+        const parts = [stage.description ?? "Model stage", duration];
+        if (stage.total != null) parts.push(`${stage.completed ?? 0} of ${stage.total} ${stage.unit}`);
+        parts.push(`Started ${new Date(stage.startedAt).toLocaleTimeString()}`,
+            `Last work ${new Date(stage.lastProgressAt).toLocaleTimeString()}`);
+        if (stage.endedAt) parts.push(`Ended ${new Date(stage.endedAt).toLocaleTimeString()}`);
+        return parts.join(" · ");
+    });
+    for (const [index, text] of rows.entries()) {
+        if (!list.children[index]) list.append(list.ownerDocument.createElement("li"));
+        if (list.children[index].textContent !== text) list.children[index].textContent = text;
+    }
+    while (list.children.length > rows.length) list.children[list.children.length - 1].remove();
+}
+
 /** Keep setup fields and run controls stable while progress updates arrive. */
 export class ModelsView {
     /** Bind the existing Models panel markup.
@@ -536,6 +563,8 @@ export class ModelsView {
         });
         const status = this.element("p"); status.setAttribute("role", "status");
         const progress = this.element("progress"); progress.setAttribute("aria-label", "Current run stage progress");
+        const stageTimings = this.element("details", "", "models-details"), stageList = this.element("ol");
+        stageTimings.append(this.element("summary", "Stage timings"), stageList);
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
         const actions = this.element("div", "", "models-actions");
         const cancel = this.button("Cancel run", this.handlers.onCancel, "models-action"); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate, "models-action");
@@ -562,9 +591,9 @@ export class ModelsView {
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, error, result, actions, deletion, feedback, expiry, inputs, details.root);
+        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, stageTimings, error, result, actions, deletion, feedback, expiry, inputs, details.root);
         this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, editingName: false,
-            status, progress, error, result, cancel, duplicate, renew, deletion, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
+            status, progress, stageTimings, stageList, error, result, cancel, duplicate, renew, deletion, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
     /** Open the selected run's name while keeping its creation timestamp fixed.
@@ -613,6 +642,7 @@ export class ModelsView {
         r.nameInput.disabled = r.saveName.disabled = r.cancelName.disabled = Boolean(state.actionBusy);
         r.saveName.textContent = state.renamingRun === id ? "Saving…" : "Save name";
         r.status.textContent = job ? describeModelProgress(job) : "Reading run…";
+        renderStageTimings(r.stageTimings, r.stageList, job);
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
         r.duplicate.hidden = Boolean(state.duplicateRestricted);

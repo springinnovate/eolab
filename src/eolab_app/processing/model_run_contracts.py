@@ -342,6 +342,19 @@ class ModelIdentity(ModelReference):
     title: Label
 
 
+class ModelStageTiming(ModelSchema):
+    """One stage's actual start, latest measured work, end, and optional work counts."""
+
+    phase: str
+    description: str | None = None
+    startedAt: AwareDatetime
+    lastProgressAt: AwareDatetime
+    endedAt: AwareDatetime | None = None
+    completed: Annotated[int, Field(ge=0)] | None = None
+    total: Annotated[int, Field(ge=0)] | None = None
+    unit: str | None = None
+
+
 class ModelProgress(JobProgressResponse):
     """Completed and total work for the current stage of a model run.
 
@@ -352,6 +365,7 @@ class ModelProgress(JobProgressResponse):
     then use a generic running-state label without interpreting ``phase``.
     """
 
+    stages: tuple[ModelStageTiming, ...] = ()
     description: (
         Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r"\S")]
         | None
