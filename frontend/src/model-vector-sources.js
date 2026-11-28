@@ -40,10 +40,10 @@ export function modelVectorSources(files, drawings) {
  * @param {(document:Object)=>Promise<Object>} capture Keep original GeoJSON or a saved drawing revision for admission.
  * @param {(id:string)=>void} onCaptured Record every new reference for cleanup on failure.
  * @param {()=>boolean} isCurrent Whether the requesting setup is still active.
- * @return {Promise<void>} Resolves after binding the inputs or abandoning a superseded setup.
+ * @return {Promise<void>|undefined} Pending capture when drawings need saving, or undefined when the inputs are ready.
  * @throws {Error} If a chosen layer was removed or its capture fails.
  */
-export async function bindModelVectorInputs(inputs, readCollection, capture, onCaptured, isCurrent) {
+export function bindModelVectorInputs(inputs, readCollection, capture, onCaptured, isCurrent) {
     const layers = new Map(), boundaries = new Map();
     /** Collect all vector selections, including group members, without interpreting recipe inputs.
      * @param {Object} value A node of the detached model invocation.
@@ -65,6 +65,7 @@ export async function bindModelVectorInputs(inputs, readCollection, capture, onC
         Object.values(value).forEach(collect);
     }
     collect(inputs);
+    if (!layers.size && !boundaries.size) return;
     const captures = Array.from(layers, ([key, uses]) => {
         const collection = readCollection(key);
         if (!collection) throw new Error("The chosen vector layer was removed. Choose another layer.");
@@ -77,10 +78,17 @@ export async function bindModelVectorInputs(inputs, readCollection, capture, onC
             for (const source of uses) source.polygonArea = reference;
         }});
     }
-    for (const {document, bind} of captures) {
-        const reference = await capture(document);
-        onCaptured(reference.id);
-        if (!isCurrent()) return;
-        bind(reference);
+    /** Bind each captured reference and record it for cleanup if this setup is abandoned.
+     * @return {Promise<void>} Resolves when every chosen source is bound or the setup is superseded.
+     * @throws {Error} If the device cannot retain a source.
+     */
+    async function captureSources() {
+        for (const {document, bind} of captures) {
+            const reference = await capture(document);
+            onCaptured(reference.id);
+            if (!isCurrent()) return;
+            bind(reference);
+        }
     }
+    return captureSources();
 }

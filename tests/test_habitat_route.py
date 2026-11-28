@@ -71,7 +71,6 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
         "label": "MODIS land-cover dynamics / phenology",
         "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2",
         "roles": ["predictor", "response"],
-        "requiredRoles": [],
     }
     assert {
         role: {name for entry in entries for name in entry["bands"]}
@@ -86,11 +85,6 @@ def test_habitat_options_use_the_packaged_configuration_without_credentials(
             "NumCycles",
         },
     }
-    assert {
-        source["id"]: source["requiredRoles"]
-        for source in datasets
-        if source["requiredRoles"]
-    } == {"srtm_landforms": ["predictor"]}
     assert all(
         source["inputsByRole"][role]
         and all(

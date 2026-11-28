@@ -12,6 +12,7 @@ from pathlib import Path, PurePath
 from threading import Event
 import logging
 from typing import Any
+from uuid import uuid4
 from pydantic import BaseModel
 
 from eolab_app.execution.bounded_process import (
@@ -99,6 +100,7 @@ class ProcessingWorker:
         self.artifacts = artifacts
         self.limits = limits
         self.native = native
+        self._unanswered_claim: str | None = None
         self._stopped_attempt: tuple[str, str] | None = None
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
         # Fail startup for invalid packaged definitions rather than hiding them
@@ -537,9 +539,36 @@ class ProcessingWorker:
         )
         self._stopped_attempt = None
 
+    async def _claim_job(self) -> dict[str, Any] | None:
+        """Recover this lane's unanswered claim or claim the next compatible job.
+
+        Returns:
+            The job this lane may now execute, or None if nothing is available.
+
+        Raises:
+            ProcessingError: If storage cannot confirm the outcome. The next pass
+                retries recovery with the same token before claiming new work.
+            asyncio.CancelledError: If the worker shuts down while waiting for storage.
+        """
+        job = None
+        if self._unanswered_claim is not None:
+            job = await asyncio.to_thread(
+                self.jobs.recover_unstarted_claim, self._unanswered_claim
+            )
+        if job is None:
+            self._unanswered_claim = uuid4().hex
+            job = await asyncio.to_thread(
+                self.jobs.claim_next_job,
+                supported_operations=[MODEL_OPERATION, *model_operations.OPERATIONS],
+                attempt_id=self._unanswered_claim,
+            )
+        self._unanswered_claim = None
+        return job
+
     async def run_once(self) -> bool:
         """Acknowledge stopped work, then claim and supervise an installed operation.
 
+        An unanswered claim is recovered before new work begins.
         A failed terminal write retains the exact stopped attempt for the next
         call. Claims and cleanup continue to respect its durable running state
         until that acknowledgement succeeds; lease expiry never releases it.
@@ -552,10 +581,7 @@ class ProcessingWorker:
             asyncio.CancelledError: After stopping native work on worker shutdown.
         """
         await self._finish_stopped_attempt()
-        row = await asyncio.to_thread(
-            self.jobs.claim_next_job,
-            supported_operations=[MODEL_OPERATION, *model_operations.OPERATIONS],
-        )
+        row = await self._claim_job()
         if row is None:
             return False
         if "_spatialFilterDrawings" in row["spec"]:

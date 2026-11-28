@@ -19,7 +19,7 @@ from eolab_app.processing.aggregate_models import (
     AggregatePlanRequest,
     UnpreparedCalculation,
 )
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_notifications import (
     JOB_CHANGE_CHANNEL,
     PostgresNotifications,
 )

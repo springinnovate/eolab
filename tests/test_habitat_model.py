@@ -91,7 +91,7 @@ def test_automatic_dataset_defaults_and_selections_survive_saved_roundtrip() -> 
     [
         {"predictorDatasets": []},
         {"responseDatasets": []},
-        {"predictorDatasets": ["era5_daily"]},
+        {"predictorDatasets": ["modis_phenology"]},
         {"responseDatasets": ["landsat_ndvi", "landsat_ndvi"]},
         {"responseDatasets": ["era5_daily"]},
         {"predictorDatasets": ["srtm_landforms", "unknown"]},
@@ -100,7 +100,7 @@ def test_automatic_dataset_defaults_and_selections_survive_saved_roundtrip() -> 
 def test_automatic_dataset_selection_rejects_invalid_role_choices(
     selection: dict[str, list[str]],
 ) -> None:
-    """Reject empty, duplicate, unknown, wrong-role or missing-required selections.
+    """Reject empty, duplicate, unknown, wrong-role or incomplete band selections.
 
     Args:
         selection: One invalid public selection field; the other uses its default.

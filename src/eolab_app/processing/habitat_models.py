@@ -58,24 +58,6 @@ def get_habitat_dataset_roles(
     }
 
 
-def get_required_habitat_predictor_datasets(
-    configuration: RasterStackConfiguration,
-) -> tuple[str, ...]:
-    """Return the dataset aliases needed by the model's categorical predictor.
-
-    Args:
-        configuration: Scientific stack with exactly one categorical predictor.
-
-    Returns:
-        Sources that must remain selected to satisfy the existing fitting contract.
-    """
-    return next(
-        band.source_dataset_keys
-        for band in configuration.bands
-        if band.role == "predictor" and band.data_type == "categorical"
-    )
-
-
 class HabitatSchema(BaseModel):
     """Reject unknown Habitat input fields and keep admitted values immutable."""
 
@@ -90,7 +72,7 @@ class NamedHabitatRaster(HabitatSchema):
 
 
 class HabitatRasterStack(HabitatSchema):
-    """The final predictor and response choices, including one categorical predictor.
+    """The final predictor and response choices, with an optional categorical predictor.
 
     Names are unique across both roles. Inputs are prepared on the model's fixed
     grid before sampling and fitting.
@@ -98,7 +80,7 @@ class HabitatRasterStack(HabitatSchema):
 
     predictors: Annotated[tuple[NamedHabitatRaster, ...], Field(min_length=1)]
     responses: Annotated[tuple[NamedHabitatRaster, ...], Field(min_length=1)]
-    categoricalPredictor: str
+    categoricalPredictor: str | None = None
 
     @model_validator(mode="after")
     def check_variable_names(self) -> Self:
@@ -108,8 +90,8 @@ class HabitatRasterStack(HabitatSchema):
             This stack with unambiguous variable roles.
 
         Raises:
-            ValueError: If names repeat, collide with fitting columns, or omit
-                the categorical predictor.
+            ValueError: If names repeat, collide with fitting columns, or designate
+                an unknown categorical predictor.
         """
         names = [band.name for band in (*self.predictors, *self.responses)]
         if len(names) != len(set(names)):
@@ -120,7 +102,9 @@ class HabitatRasterStack(HabitatSchema):
                 "Variable names conflict with fitting columns: "
                 + ", ".join(sorted(collisions))
             )
-        if self.categoricalPredictor not in {band.name for band in self.predictors}:
+        if self.categoricalPredictor is not None and self.categoricalPredictor not in {
+            band.name for band in self.predictors
+        }:
             raise ValueError("Choose a categorical predictor from the predictor stack.")
         return self
 
@@ -161,8 +145,7 @@ class HabitatEarthEngineStack(HabitatSchema):
             This immutable selection with effective aliases in configuration order.
 
         Raises:
-            ValueError: If a year, alias, role, duplicate or required categorical
-                source is invalid.
+            ValueError: If the year or dataset choices are invalid or provide no usable band for a role.
             OSError: If the installed scientific configuration cannot be read.
         """
         configuration = load_habitat_stack(self.year)
@@ -181,14 +164,15 @@ class HabitatEarthEngineStack(HabitatSchema):
                 raise ValueError("Choose each dataset only once within a model role.")
             if set(selected) - set(available):
                 raise ValueError(f"Choose configured {role} datasets.")
+            if not any(
+                band.role == role and set(band.source_dataset_keys).issubset(selected)
+                for band in configuration.bands
+            ):
+                raise ValueError(
+                    f"Choose datasets that supply at least one {role} band."
+                )
             object.__setattr__(
                 self, field_name, tuple(key for key in available if key in selected)
-            )
-        if not set(get_required_habitat_predictor_datasets(configuration)).issubset(
-            self.predictorDatasets
-        ):
-            raise ValueError(
-                "Keep the required categorical predictor dataset selected."
             )
         return self
 

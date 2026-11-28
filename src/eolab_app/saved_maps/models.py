@@ -84,12 +84,17 @@ class MapViewport(MapDocumentPart):
     zoom: Annotated[float, Field(ge=0, le=22)]
 
 
-class MapTemporalSource(MapDocumentPart):
-    """Catalog variable and exact observation time to reopen in a saved map."""
+class MapTemporalVariable(MapDocumentPart):
+    """Identify a saved Catalog variable that opens in its latest available month."""
 
     collectionId: CatalogIdentity
     itemId: CatalogIdentity
     variable: CatalogIdentity
+
+
+class MapTemporalSource(MapTemporalVariable):
+    """Reopen the exact Catalog observation recorded in a saved map."""
+
     time: str
 
     @field_validator("time")
@@ -117,14 +122,15 @@ class MapTemporalSource(MapDocumentPart):
 
 
 class MapTemporalLayer(MapDocumentPart):
-    """One independent view of a Catalog observation and its raster appearance.
+    """One independent view of a Catalog variable and its raster appearance.
 
+    A layer saved before its first date lookup succeeds stores only the variable.
     Repeated selections represent separate map rows, even at the same time.
     Runtime row identifiers and disposable rendering publications are not saved.
     isCustom distinguishes a custom card from the ordinary Catalog card.
     """
 
-    temporalSource: MapTemporalSource
+    temporalSource: MapTemporalSource | MapTemporalVariable
     customName: Title | None = None
     isCustom: bool = False
     visible: bool

@@ -308,11 +308,10 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
   const h = createFixture(async (url, options) => {
     const body = JSON.parse(options.body);
     requests.push({url, body});
-    return {ok: true, json: async () => url.endsWith("/lasso")
-      ? {matched: 3, featureIds: ids, geometry: null}
-      : {selection: body.selection, features: ids.map((id, index) => ({id,
+    return {ok: true, json: async () => ({
+      matched: 3, featureIds: ids, geometry: null, features: ids.map((id, index) => ({id,
         properties: {name: ["First CO2", "Second CO2", "Café"][index], x: index + 1, y: index === 1 ? null : 8 - index,
-          geometry: "terrace", bbox: 4.5, the_geom: "ridge", boundedBy: 0}}))}};
+          geometry: "terrace", bbox: 4.5, the_geom: "ridge", boundedBy: 0}}))})};
   });
   t.after(() => h.controller.destroy());
   h.targets.splice(0);
@@ -326,8 +325,7 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
   assert.deepEqual(h.documentContext.querySelector("#vector-feature-attributes").children.map(cell => cell.textContent),
     ["Feature ID", "-7", "name", "First CO2", "x", "1", "y", "8",
       "geometry", "terrace", "bbox", "4.5", "the_geom", "ridge", "boundedBy", "0"]);
-  assert.deepEqual(requests.map(request => request.url), ["/api/vector-sampling/lasso", "/api/vector-sampling/features"]);
-  assert.deepEqual(requests[1].body.featureIds, ids);
+  assert.deepEqual(requests.map(request => request.url), ["/api/vector-sampling/lasso"]);
   assert.equal(h.wmsHighlights.length, 0);
   assert.equal(h.documentContext.querySelector("#open-vector-time-series").disabled, false);
   assert.equal(h.documentContext.querySelector("#zoom-inspected-vector-feature").disabled, true);
@@ -357,8 +355,8 @@ test("renaming Lasso layers refreshes active and restored status without another
       reads++;
       const {selection} = JSON.parse(options.body);
       const ids = selection.itemId === "other" ? ["2"] : count ? ["1"] : [];
-      return Response.json(url.endsWith("/lasso") ? {matched: ids.length, featureIds: ids, geometry: null}
-        : {selection, features: ids.map(id => ({id, properties: {rank: Number(id)}}))});
+      return Response.json({matched: ids.length, featureIds: ids, geometry: null,
+        features: ids.map(id => ({id, properties: {rank: Number(id)}}))});
     });
     t.after(() => h.controller.destroy());
     const original = h.selectionTargets[0];
@@ -389,12 +387,11 @@ test("renaming Lasso layers refreshes active and restored status without another
 test("cancelled Lasso restores the completed selection and Clear rejects late attributes", async t => {
   let finishAttributes;
   let pending = false;
-  const h = createFixture(async (url, options) => {
-    if (!url.endsWith("/lasso") && !url.endsWith("/features")) return {ok: true, json: async () => ({
+  const h = createFixture(async url => {
+    if (!url.endsWith("/lasso")) return {ok: true, json: async () => ({
       type: "FeatureCollection", features: [{type: "Feature", id: "parcels.1", properties: {rank: 1}, geometry: null}],
     })};
-    if (url.endsWith("/lasso")) return {ok: true, json: async () => ({matched: 1, featureIds: ["2"], geometry: null})};
-    const response = {ok: true, json: async () => ({selection: JSON.parse(options.body).selection,
+    const response = {ok: true, json: async () => ({matched: 1, featureIds: ["2"], geometry: null,
       features: [{id: "2", properties: {rank: 2}}]})};
     if (!pending) return response;
     return new Promise(resolve => {finishAttributes = () => resolve(response);});
@@ -433,9 +430,8 @@ test("cancelled Lasso restores the completed selection and Clear rejects late at
 
 test("click display IDs never replace a different native feature's Lasso history", async t => {
   for (const displayId of ["parcels.1", "1", 1]) await t.test(`display ID ${JSON.stringify(displayId)}`, async t => {
-    const h = createFixture(async (url, options) => ({ok: true, json: async () => {
-      if (url.endsWith("/lasso")) return {matched: 1, featureIds: ["1"], geometry: null};
-      if (url.endsWith("/features")) return {selection: JSON.parse(options.body).selection,
+    const h = createFixture(async url => ({ok: true, json: async () => {
+      if (url.endsWith("/lasso")) return {matched: 1, featureIds: ["1"], geometry: null,
         features: [{id: "1", properties: {rank: 200}}]};
       return {type: "FeatureCollection", features: [{type: "Feature", id: displayId,
         geometry: null, properties: {rank: 10}}]};
@@ -458,12 +454,11 @@ test("click display IDs never replace a different native feature's Lasso history
 test("empty and failed Lasso replacements never leave stale attributes in plots", async t => {
   let outcome = "ready";
   let reads = 0;
-  const h = createFixture(async (url, options) => {
+  const h = createFixture(async () => {
     reads++;
-    if (url.endsWith("/lasso")) return Response.json({matched: outcome === "empty" ? 0 : 2,
-      featureIds: outcome === "empty" ? [] : ["1", "2"], geometry: null});
     if (outcome === "error") return Response.json({detail: "This result has expired."}, {status: 410});
-    return Response.json({selection: JSON.parse(options.body).selection,
+    if (outcome === "empty") return Response.json({matched: 0, featureIds: [], features: [], geometry: null});
+    return Response.json({matched: 2, featureIds: ["1", "2"], geometry: null,
       features: [{id: "1", properties: {rank: 1}}, {id: "2", properties: {rank: 2}}]});
   });
   t.after(() => h.controller.destroy());
@@ -489,7 +484,7 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
     "Restoring zero Lasso matches keeps Previous selection reachable");
   assert.equal(next.disabled, true);
   previous.dispatchEvent(new Event("click"));
-  assert.equal(reads, 3, "History in Features restores both selections without another read");
+  assert.equal(reads, 2, "History in Features restores both selections without another read");
   outcome = "error";
   await assert.rejects(select(), /expired/);
   assert.equal(h.sampleChanges.at(-1).failedLayers, 1);
@@ -505,9 +500,8 @@ test("empty and failed Lasso replacements never leave stale attributes in plots"
 
 test("Lasso history distinguishes empty views and exact native membership within one view", async t => {
   let ids = ["1", "9007199254740992"];
-  const h = createFixture(async (url, options) => Response.json(url.endsWith("/lasso")
-    ? {matched:ids.length, featureIds:ids, geometry:null}
-    : {selection:JSON.parse(options.body).selection, features:ids.map(id => ({id, properties:{}}))}));
+  const h = createFixture(async () => Response.json({matched:ids.length, featureIds:ids, geometry:null,
+    features:ids.map(id => ({id, properties:{}}))}));
   t.after(() => h.controller.destroy());
   const parcels = h.selectionTargets[0];
   const basins = {...parcels, key:"view-2", label:"Basins"};
@@ -538,9 +532,8 @@ test("invalidated Lasso history keeps earlier and later selections on their own 
       const h = createFixture(async (url, options) => {
         const {selection} = JSON.parse(options.body);
         const id = selection.itemId;
-        return Response.json(url.endsWith("/lasso")
-          ? {matched: 1, featureIds: [id], geometry: null}
-          : {selection, features: [{id, properties: {rank: Number(id)}}]});
+        return Response.json({matched: 1, featureIds: [id], geometry: null,
+          features: [{id, properties: {rank: Number(id)}}]});
       });
       t.after(() => h.controller.destroy());
       const original = h.selectionTargets[0];
@@ -579,10 +572,9 @@ test("cancelling after the first history entry expires preserves forward selecti
     let pending = false;
     const h = createFixture(async (url, options) => {
       const {selection} = JSON.parse(options.body);
-      const response = Response.json(url.endsWith("/lasso")
-        ? {matched: 1, featureIds: ["1"], geometry: null}
-        : {selection, features: [{id: "1", properties: {name: selection.itemId}}]});
-      if (pending && url.endsWith("/features")) return new Promise(resolve => { finishRead = () => resolve(response); });
+      const response = Response.json({matched: 1, featureIds: ["1"], geometry: null,
+        features: [{id: "1", properties: {name: selection.itemId}}]});
+      if (pending) return new Promise(resolve => { finishRead = () => resolve(response); });
       return response;
     });
     t.after(() => h.controller.destroy());

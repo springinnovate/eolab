@@ -1,7 +1,7 @@
 /** Own Habitat setup choices, coverage policy and request lifetime. */
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
-import { HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
+import { describePreparationAreas, HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
 
 /** Names for the resampling methods accepted by Habitat's input preparation.
  * @type {Record<string,string>}
@@ -85,8 +85,9 @@ export function captureHabitatStack(state, sources, captureRaster) {
             const ids = state[field];
             if (!ids.length) throw new Error(`Select at least one ${label} dataset.`);
             if (ids.some(id => !choices.some(dataset => dataset.id === id))) throw new Error(`A selected ${label} dataset is no longer available. Review the dataset choices.`);
-            const missing = choices.find(dataset => dataset.requiredRoles.includes(role) && !ids.includes(dataset.id));
-            if (missing) throw new Error(`${missing.label} is required by the model.`);
+            if (!choices.some(dataset => ids.includes(dataset.id) && dataset.inputsByRole[role].some(
+                band => band.requiredDatasets.every(id => ids.includes(id))
+            ))) throw new Error(`Select datasets that supply at least one ${label} band.`);
             selected[field] = choices.filter(dataset => ids.includes(dataset.id)).map(dataset => dataset.id);
         }
         return {kind: "earthEngine", year: state.year, ...selected};
@@ -95,8 +96,8 @@ export function captureHabitatStack(state, sources, captureRaster) {
     const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
     if (names.some(name => !name)) throw new Error("Name each predictor and observed response.");
     if (new Set(names).size !== names.length) throw new Error("Give each predictor and observed response a different name.");
-    const categoricalPredictor = state.categoricalPredictor.trim();
-    if (!state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
+    const categoricalPredictor = state.categoricalPredictor.trim() || null;
+    if (categoricalPredictor && !state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
     return {predictors: state.predictors.map(row => ({name: row.name.trim(), source: captureRaster(row.raster, sources)})),
         responses: state.responses.map(row => ({name: row.name.trim(), source: captureRaster(row.raster, sources)})), categoricalPredictor};
 }
@@ -445,7 +446,7 @@ function restoreInput(draft, name, value) {
     else Object.assign(input, {kind: "manual",
         predictors: value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)})),
         responses: value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)})),
-        categoricalPredictor: value.categoricalPredictor});
+        categoricalPredictor: value.categoricalPredictor ?? ""});
     return true;
 }
 
@@ -464,6 +465,20 @@ function restoreState(draft, inputs) {
     const area = inputs[name];
     draft.setupState.restoreSelection = area.kind === "catalogSelection" ? structuredClone(area.selection) : null;
     draft.setupState.unavailable = true;
+}
+
+/** Identify the authorized coverage check for a newly captured prepared stack.
+ * @param {Object} draft Habitat setup at the instant its submission was captured.
+ * @param {{sourceKey:(source:Object)=>string,describeFilter:(filter:Object)=>string}} helpers Format the same area label used in setup.
+ * @return {import("./model-setup.js").ModelSubmissionWait|null} Action and selection being checked, or null for manual inputs.
+ */
+function describeSubmissionWait(draft, helpers) {
+    const stack = getHabitatEarthEngineInput(draft);
+    if (!stack) return null;
+    const state = draft.setupState;
+    const index = state.selections.findIndex(selection => vectorSelectionsEqual(selection, state.selectedSelection));
+    const area = describePreparationAreas(state, helpers)[index].label;
+    return {buttonLabel: "Checking prepared inputs…", message: `Checking prepared inputs for ${area} (assessment year ${stack.year})…`};
 }
 
 /** Describe the grid and raster methods actually recorded in a saved Habitat run.
@@ -604,4 +619,4 @@ function createSession(draft, dependencies) { return new HabitatSetupSession(dra
 /** Habitat integration registered once at the model setup boundary.
  * @type {import("./model-setup.js").ModelSetupIntegration}
  */
-export const habitatSetup = Object.freeze({showRunNameHelp: false, createState, createInput, captureInput, restoreInput, restoreState, describeInput, buildInput, createSession});
+export const habitatSetup = Object.freeze({showRunNameHelp: false, createState, createInput, captureInput, restoreInput, restoreState, describeInput, describeSubmissionWait, buildInput, createSession});

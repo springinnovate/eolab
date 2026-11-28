@@ -33,8 +33,10 @@ from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineSettings,
+    HabitatTiles,
     get_habitat_tiles,
     load_habitat_stack,
+    prepare_habitat_band_views,
 )
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
@@ -149,6 +151,59 @@ def _tile_response(column: int, row: int) -> bytes:
         return memory.read()
 
 
+def test_prepared_band_views_keep_source_validity_and_selected_order(
+    tmp_path: Path,
+) -> None:
+    """Read nonconsecutive bands with a dataset mask, declared NoData and zero.
+
+    Args:
+        tmp_path: Private directory for the input tile and temporary mosaics.
+    """
+    configuration = _fixture_configuration(2018)
+    bands = dict(zip(configuration.band_names(), configuration.bands, strict=True))
+    names = tuple(bands)
+    selected = (names[-1], names[0], names[3])
+    pixels = np.arange(len(bands) * 6, dtype="float32").reshape(len(bands), 2, 3)
+    pixels[-1, 0, 1] = -9999
+    scales = tuple(float(index + 1) for index in range(len(bands)))
+    offsets = tuple(float(index + 4) for index in range(len(bands)))
+    tile = tmp_path / "tile.tif"
+    with rasterio.open(
+        tile,
+        "w",
+        driver="GTiff",
+        width=3,
+        height=2,
+        count=len(bands),
+        dtype="float32",
+        crs="EPSG:6933",
+        transform=from_origin(0, 2000, 1000, 1000),
+        nodata=-9999,
+        compress="DEFLATE",
+        interleave="pixel",
+    ) as dataset:
+        dataset.write(pixels)
+        dataset.scales = scales
+        dataset.offsets = offsets
+        dataset.write_mask(np.array([[255, 255, 255], [0, 255, 255]], dtype="uint8"))
+
+    with prepare_habitat_band_views(
+        HabitatTiles((tile,), bands, 1), tmp_path, selected
+    ) as views:
+        assert set(views) == set(selected)
+        for name in selected:
+            source_index = names.index(name)
+            expected = pixels[source_index].copy()
+            expected[1, 0] = np.nan
+            expected[expected == -9999] = np.nan
+            with rasterio.open(views[name]) as view:
+                assert view.scales == (scales[source_index],)
+                assert view.offsets == (offsets[source_index],)
+                np.testing.assert_array_equal(
+                    view.read(1, masked=True).filled(np.nan), expected
+                )
+
+
 def _fixture_native_target(
     queue: ProcessResultWriter,
     operation: Literal["prepare", "calculate"],
@@ -188,6 +243,7 @@ def _fixture_native_target(
         "no_references",
         "selected",
         "categorical_only",
+        "continuous_only",
     ],
 )
 def test_earth_engine_run_uses_prepared_geographic_coverage(
@@ -202,6 +258,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         "no_references",
         "selected",
         "categorical_only",
+        "continuous_only",
     ],
 ) -> None:
     """Use prepared tiles without downloads and retain model screening and NoData.
@@ -214,6 +271,8 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             selected dataset subsets including the minimum categorical-only fit.
     """
     aoi = box(0, 0, 24000, 16000)
+    if coverage == "selected":
+        aoi = aoi.difference(box(12200, 2200, 14900, 4700))
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
     references = write_selection(
         tmp_path / "references.gpkg",
@@ -249,13 +308,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         },
         parameters={},
     )
-    if coverage in {"selected", "categorical_only"}:
+    if coverage in {"selected", "categorical_only", "continuous_only"}:
         request.inputs["stack"].update(
-            predictorDatasets=(
-                ["srtm_landforms", "era5_daily"]
-                if coverage == "selected"
-                else ["srtm_landforms"]
-            ),
+            predictorDatasets={
+                "selected": ["srtm_landforms", "era5_daily"],
+                "continuous_only": ["era5_daily"],
+                "categorical_only": ["srtm_landforms"],
+            }[coverage],
             responseDatasets=["modis_phenology"],
         )
     calculation, invocation = build_model_calculation_request(
@@ -279,6 +338,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         for column in range(3)
         if coverage != "empty"
         and not (coverage == "partial" and (column, row) == (1, 1))
+        and not (coverage == "selected" and (column, row) == (2, 1))
         and not (coverage == "no_references" and row == 0)
     ]
     if prepared_tiles:
@@ -464,7 +524,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
     }
     assert provenance["variables"]["predictors"] == list(selected_names["predictor"])
     assert provenance["variables"]["responses"] == list(selected_names["response"])
-    if coverage in {"selected", "categorical_only"}:
+    if coverage in {"selected", "categorical_only", "continuous_only"}:
         assert [
             band.identifier
             for name, band in named
@@ -474,7 +534,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             band.identifier
             for name, band in named
             if name in selected_names["predictor"]
-        ] == (["d20", "d35"] if coverage == "selected" else ["d35"])
+        ] == {
+            "selected": ["d20", "d35"],
+            "categorical_only": ["d35"],
+            "continuous_only": ["d20"],
+        }[
+            coverage
+        ]
     predictor_coverage = {
         item["predictor"]: item for item in provenance["fit"]["predictorCoverage"]
     }
@@ -493,10 +559,11 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             )
             assert predictor["retained"] is True
     values = _fixture_values()
-    if coverage == "partial":
+    if coverage in {"partial", "selected"}:
+        missing_columns = slice(8, 16) if coverage == "partial" else slice(16, 24)
         for name, pixels in values.items():
             if name != "references":
-                pixels[8:16, 8:16] = np.nan
+                pixels[8:16, missing_columns] = np.nan
     paths = {}
     for name, pixels in values.items():
         # Cached 1000 m cells cover four cells of the fixed 500 m output grid.
@@ -538,7 +605,13 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             }
         ),
         categorical_predictor_name=next(
-            name for name, band in named if band.data_type == "categorical"
+            (
+                name
+                for name, band in named
+                if name in selected_names["predictor"]
+                and band.data_type == "categorical"
+            ),
+            None,
         ),
         samples_per_class_per_block=settings.samples_per_class_per_block,
         random_seed=settings.random_seed,
@@ -573,6 +646,12 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                 assert actual.shape == (32, 48)
                 assert actual.descriptions == direct.descriptions
                 np.testing.assert_array_equal(actual.read(), direct.read())
-                if coverage == "partial" and name == "reference_similarity":
-                    assert actual.read(1, masked=True).mask[16:32, 16:32].all()
+                np.testing.assert_array_equal(actual.read_masks(), direct.read_masks())
+                if name == "reference_similarity":
+                    score_mask = actual.read(1, masked=True).mask
+                    if coverage == "partial":
+                        assert score_mask[16:32, 16:32].all()
+                    if coverage == "selected":
+                        assert score_mask[16:32, 32:48].all()  # Missing tile.
+                        assert score_mask[23:27, 25:29].all()  # Hole in the AOI.
     assert all(path.is_file() for path in provenance_path.parent.iterdir())

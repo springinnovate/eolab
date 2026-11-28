@@ -189,7 +189,7 @@ export class MapInteractionTools {
         this.targetSignature = signature;
     }
 
-    /** Capture a primary pointer press on the map to begin a freehand stroke.
+    /** Start a shaded preview of the area that releasing the pointer would select.
      * Leaflet controls receive their own pointer input.
      * @param {PointerEvent} event Primary pointer inside the map.
      * @return {void}
@@ -202,7 +202,7 @@ export class MapInteractionTools {
         event.preventDefault(); event.stopImmediatePropagation();
         this.#cancelLassoWork();
         this.container.setPointerCapture(event.pointerId);
-        const preview = this.leaflet.polyline([], {color:this.color, weight:2, dashArray:'6 4', interactive:false}).addTo(this.map);
+        const preview = this.leaflet.polygon([], {color:this.color, weight:2, dashArray:'6 4', fillOpacity:0.2, interactive:false}).addTo(this.map);
         this.stroke = {pointer:event.pointerId, points:[], target:structuredClone(target), screen:null, preview};
         this.status.textContent = 'Drawing lasso… Release to select; Esc cancels.';
         this.moveStroke(event);

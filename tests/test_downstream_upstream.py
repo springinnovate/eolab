@@ -179,6 +179,7 @@ def test_selected_polygon_matches_raster_starts_on_routing_grids(
         "plain",
         "buffer-cutoff",
         "resampled-signed-values",
+        "nonfinite-values",
         "embedded-mask",
         "shifted-embedded-mask",
         "uint8-nodata",
@@ -338,8 +339,15 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             values[5, 5] = -9999
             raster.write(values, 1)
     expected_masked_values = None
-    if case in {"uint8-nodata", "uint16-nodata", "uint16-maximum"}:
-        if case == "uint8-nodata":
+    if case in {"nonfinite-values", "uint8-nodata", "uint16-nodata", "uint16-maximum"}:
+        if case == "nonfinite-values":
+            expected_masked_values = np.zeros((4, 6), dtype="float32")
+            expected_masked_values[0, :2] = [3, 9]
+            nodata = -9999
+            # The seventh source column lies east of the coverage grid.
+            source_values = np.zeros((4, 7), dtype="float32")
+            source_values[0] = [3, 9, np.inf, -np.inf, np.nan, nodata, np.inf]
+        elif case == "uint8-nodata":
             expected_masked_values = np.zeros((4, 6), dtype="uint8")
             expected_masked_values[1, 2:4] = [12, 25]
             source_values = expected_masked_values

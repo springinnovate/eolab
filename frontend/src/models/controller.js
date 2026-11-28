@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { getModelSetupIntegration } from "./model-setup.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, updateClipPolygonGroup } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, describeModelFilter, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getModelRasterSources, isModelSpatialInput, updateClipPolygonGroup } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { getModelInputHandler, supportsModelInput } from "./input-handlers.js";
 import { eligibleVectorSources } from "./vector-input.js";
@@ -31,7 +31,7 @@ export class ModelsController {
      * @param {Object} dependencies.view Models view.
      * @param {import("./model-setup.js").ModelCatalogRasters} [dependencies.catalogRasters] Lookup and display of published input layers.
      * @param {()=>Object} dependencies.getContext Current raster, vector and area choices.
-     * @param {(inputs:Object,onCaptured:(id:string)=>void,isCurrent:()=>boolean)=>Promise<void>} [dependencies.bindVectorInputs] Bind local vector selections before saving a recoverable request.
+     * @param {(inputs:Object,onCaptured:(id:string)=>void,isCurrent:()=>boolean)=>(Promise<void>|undefined)} [dependencies.bindVectorInputs] Return pending work only when a selected drawing needs capture.
      * @param {(identity:{collectionId:string,itemId:string},signal?:AbortSignal)=>Promise<Object>} dependencies.getCatalogItem Read an exact Catalog Item for input metadata and display titles.
      * @param {import("./model-setup.js").ModelSetupDependencies["showAreaOutline"]} dependencies.showAreaOutline Show a model's chosen polygon through map composition.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
@@ -75,7 +75,7 @@ export class ModelsController {
         this.state = {page: "library", active: false, library: [], missingModels: false, loading: false, libraryError: "", error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, historyError: "", selectedRun: null, invocation: null, invocationError: "", yaml: null,
             habitatDatasetLabels: null,
-            pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
+            pending: null, submitting: false, submissionWait: null, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
         this.vectorSelectionRequests = new Map();
         /** @type {Map<string,string[]>} Uploaded polygon IDs owned by each retry slot in this tab. */
@@ -727,18 +727,26 @@ export class ModelsController {
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
             if (!this.storage) throw new Error("Enable session storage to submit a recoverable run.");
+            const wait = retry ? {buttonLabel: "Confirming run…", message: `Confirming whether “${submission.label}” started…`}
+                : draft.integration?.describeSubmissionWait?.(draft, {sourceKey: modelSourceKey, describeFilter: describeModelFilter})
+                    ?? {buttonLabel: "Starting run…", message: `Starting run “${submission.label}”…`};
             if (!retry && this.bindVectorInputs) {
-                this.state.submitting = true; this.render();
                 const isCurrent = () => !this.destroyed && revision === this.revision && draft === this.state.draft;
-                await this.bindVectorInputs(submission.inputs, id => capturedInputIds.push(id), isCurrent);
-                if (!isCurrent()) return;
+                const capture = this.bindVectorInputs(submission.inputs, id => capturedInputIds.push(id), isCurrent);
+                if (capture) {
+                    this.state.submissionWait = {buttonLabel: "Saving drawn polygons…", message: `Saving drawn polygons for “${submission.label}”…`};
+                    this.state.submitting = true; this.render();
+                    await capture;
+                    if (!isCurrent()) return;
+                }
             }
             const serialized = JSON.stringify(submission);
             if (new TextEncoder().encode(serialized).length > 16384) throw new Error("Tool inputs exceed the 16 KiB submission limit.");
             this.storage.setItem(recoveryKey, serialized);
             if (capturedInputIds.length) this.pendingVectorInputs.set(recoveryKey, capturedInputIds.splice(0));
-            this.state.pending = submission; this.state.submitting = true; this.render();
+            this.state.pending = submission; this.state.submitting = true; this.state.submissionWait = wait; this.render();
             const job = await this.api.submitModelRun(submission);
+            this.state.submissionWait = null;
             this.pendingVectorInputs.delete(recoveryKey);
             this.#finishRecovery(recoveryKey);
             this.rememberRun(job); this.jobs.accept(job);
@@ -755,7 +763,7 @@ export class ModelsController {
                 this.state.error = error.message;
         } finally {
             this.discardVectorInputs(capturedInputIds);
-            this.state.submitting = false; this.render();
+            this.state.submissionWait = null; this.state.submitting = false; this.render();
         }
     }
 

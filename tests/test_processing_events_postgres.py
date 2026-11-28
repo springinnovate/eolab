@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import numpy as np
 import pytest
 
-from eolab_app.processing.job_notifications import (
+from eolab_jobs.job_notifications import (
     JOB_CHANGE_CHANNEL,
     PostgresNotifications,
 )

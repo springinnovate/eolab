@@ -314,7 +314,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
-        == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
+        == "a4022421baa2370a3cceae87cb813e8ef6025f5c"
     )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -467,7 +467,7 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
-    assert saved["beneficiariesRevision"] == "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85"
+    assert saved["beneficiariesRevision"] == "a4022421baa2370a3cceae87cb813e8ef6025f5c"
     assert (
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
             mode="json"
@@ -480,6 +480,7 @@ def test_closed_edge_policy_records_current_filling_settings(
         "afb977dd0e923e465958f8b301060c4ff10c8fd7",
         "eda4acec984ec7b40cb9d745a818773418fa2d68",
         "f204f4ad6277e381d5bf902da9d5c50655ffbf16",
+        "be3d4054c2eb6a0b6fcd45a03ad61fb2b3a74f85",
     ):
         saved["beneficiariesRevision"] = previous_revision
         restored = ClosedEdgeDownstreamNumericalPolicy.model_validate(saved)
@@ -607,19 +608,21 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
         ("sum(-a)", "uint8", [21, 2, 0, 0, 0, 0] * 4, -92),
         ("sum(a*a)", "float32", [2.0**67, 2], 2.0**134 + 4),
         ("sum(a*a)", "float32", [2.0**-83], 2.0**-166),
+        ("sum(a)", "float32", [3, 9, np.inf, -np.inf, np.nan], 12),
+        ("mean(a)", "float32", [3, 9, np.inf, -np.inf, np.nan], 6),
     ],
 )
 def test_formulas_summarize_the_original_masked_values_grid(
     tmp_path: Path, formula: str, dtype: str, cells: list[float], expected: float
 ) -> None:
-    """Compare downstream rows and CSV values with Raster summary on the same TIFF.
+    """Check the masked TIFF, original total and reported statistic against Raster summary.
 
     Args:
         tmp_path: Isolated native model sources.
         formula: Scalar expression for both summaries.
         dtype: Stored pixel type of the source and published values raster.
         cells: Row-major values on the coverage grid, with omitted cells set to zero.
-        expected: Hand-calculated result for the positive cells.
+        expected: Hand-calculated statistic for the finite positive cells.
     """
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources", formula=formula)
@@ -643,10 +646,11 @@ def test_formulas_summarize_the_original_masked_values_grid(
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
     masked_path = directory / "masked_values.tif"
+    expected_grid = np.nan_to_num(grid, posinf=0, neginf=0)
     with rasterio.open(masked_path) as masked:
         assert masked.dtypes == (dtype,)
-        np.testing.assert_array_equal(masked.read(1), grid)
-        np.testing.assert_array_equal(masked.read_masks(1) != 0, grid > 0)
+        np.testing.assert_array_equal(masked.read(1), expected_grid)
+        np.testing.assert_array_equal(masked.read_masks(1) != 0, expected_grid > 0)
 
     summary = calculate_raster_statistics_for_area(
         masked_path, make_spec(masked_path, [formula]), tmp_path, AGGREGATE_LIMITS
@@ -661,6 +665,26 @@ def test_formulas_summarize_the_original_masked_values_grid(
         (csv_row,) = csv.DictReader(stream)
     assert csv_row["value"] == row["value"]
     assert csv_row["state"] == row["state"]
+    provenance = json.loads((directory / "provenance.json").read_text())
+    assert provenance["upstreamTotal"] == expected_grid.sum(dtype=np.float64)
+    assert provenance["statistics"] == [row]
+
+
+def test_downstream_rejects_overflow_of_finite_values(tmp_path: Path) -> None:
+    """Reject an unrepresentable sum of two finite, covered population values.
+
+    Args:
+        tmp_path: Directory for the source rasters and downstream run.
+    """
+    values = np.zeros((4, 6), dtype="float64")
+    values[0, :2] = np.finfo("float64").max
+    sources, request, limits = downstream_fixture(tmp_path / "sources", values=values)
+    plan = plan_downstream(sources, request)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    with np.errstate(over="ignore"), pytest.raises(ProcessingError) as error:
+        calculate_downstream(sources, plan, directory, limits)
+    assert error.value.code == "invalid_output"
 
 
 def test_cutoff_is_measured_from_original_seeds(tmp_path: Path) -> None:

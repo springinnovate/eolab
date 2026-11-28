@@ -38,7 +38,12 @@ function fixture(selectFeatures=async()=>({matched:2,featureIds:['1','9007199254
         on(){},off(){},mouseEventToLatLng:event=>({lng:event.clientX/10,lat:event.clientY/10})};
     const layers=[];
     const layer=()=>({addTo(){layers.push(this);return this;},remove(){this.removed=true;},setLatLngs(points){this.points=points;}});
-    const leaflet={polyline:()=>layer(),geoJSON:(geometry)=>Object.assign(layer(),{geometry}),circleMarker:()=>layer()};
+    const leaflet = {
+        polyline: () => layer(),
+        polygon: (_points, options) => Object.assign(layer(), {type:'polygon', options}),
+        geoJSON: geometry => Object.assign(layer(), {geometry}),
+        circleMarker: () => layer(),
+    };
     let targets=[{key:'hidden-view',label:'Filtered sites',visible:false,selection:{collectionId:'vectors',itemId:'sites',assetKey:'data',layerName:'sites',filter:{enabled:true,match:'any',rules:[{field:'kind',operator:'eq',value:'forest'}]}}}];
     const actions=[];
     const tools=new MapInteractionTools({documentContext:document,map,leaflet,getTargets:()=>targets,
@@ -105,6 +110,28 @@ test('release closes a freehand polygon and preserves the chosen hidden view and
     const ring=request.area.coordinates[0];assert.deepEqual(ring[0],ring.at(-1));
     assert.equal(request.area.type,'Polygon');assert.match(h.status.textContent,/2 features selected in Filtered sites/);
     assert.ok(h.tools.highlight);assert.equal(h.root.attributes['aria-busy'],'false');
+});
+
+test('an open drag previews the shaded polygon that release selects', () => {
+    let submitted;
+    const h = fixture(async (_selection, area) => {
+        submitted = area;
+        return {matched:0, geometry:null};
+    });
+    h.tools.setMode('lasso');
+    h.tools.beginStroke(pointer(10,10));
+    h.tools.moveStroke(pointer(30,10));
+    h.tools.moveStroke(pointer(20,30));
+    const preview = h.layers.at(-1);
+    assert.equal(preview.type, 'polygon', 'The closing edge should be visible before release');
+    assert.ok(preview.options.fillOpacity > 0 && preview.options.fillOpacity < 1);
+    assert.equal(preview.options.interactive, false);
+    assert.deepEqual(preview.points, [[1,1],[1,3],[3,2]]);
+    assert.equal(submitted, undefined);
+
+    h.tools.finishStroke(pointer(20,30));
+    assert.deepEqual(submitted, {type:'Polygon', coordinates:[[[1,1],[3,1],[2,3],[1,1]]]});
+    assert.equal(preview.removed, true);
 });
 
 test('parent-off startup keeps Pan and blocks shortcut, toolbar, and programmatic mode requests', () => {
@@ -204,7 +231,9 @@ test('Escape cancels a stroke and pending read while retaining the previous comp
     const h=fixture();h.tools.setMode('lasso');await h.tools.select(h.getTargets()[0],polygon);
     const previous=h.tools.highlight;
     h.tools.beginStroke(pointer(10,10));h.tools.moveStroke(pointer(30,10));
+    const preview = h.layers.at(-1);
     const event=new Event('keydown',{cancelable:true});Object.defineProperty(event,'key',{value:'Escape'});h.document.dispatchEvent(event);
+    assert.equal(preview.removed, true);
     assert.equal(h.tools.stroke,null);assert.equal(h.tools.highlight,previous);assert.equal(event.defaultPrevented,true);
     assert.match(h.status.textContent,/2 features selected/);
     let finish,signal;h.tools.selectFeatures=(_s,_p,abort)=>{signal=abort;return new Promise(resolve=>{finish=resolve;});};
@@ -237,7 +266,7 @@ test('losing native pointer capture cancels the draft and preserves the last com
 
 test('selection transport preserves native IDs and sends both private owner headers',async t=>{
     const featureIds=['-9007199254740993','9007199254740993'];
-    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:2,featureIds,geometry:null});});
+    let request;t.mock.method(globalThis,'fetch',async(url,options)=>{request={url,options};return Response.json({matched:2,featureIds,geometry:null,features:featureIds.map(id=>({id,properties:{}}))});});
     const h=fixture(),source=h.getTargets()[0].selection,abort=new AbortController();
     const result=await selectLassoFeatures(source,polygon,abort.signal);
     assert.equal(request.url,'/api/vector-sampling/lasso');assert.deepEqual(JSON.parse(request.options.body),{selection:source,polygon});

@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.job_notifications import PostgresJobWakeup
+from eolab_jobs.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -28,7 +28,11 @@ from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.routes.processing import COOKIE
 from eolab_app.execution.reusable_process import ReusableProcess
-from eolab_jobs.worker_claim import claim_next_job, renew_job_lease
+from eolab_jobs.worker_claim import (
+    acknowledge_stopped_attempt,
+    claim_next_job,
+    renew_job_lease,
+)
 from raster_source_support import SOURCE
 from test_processing_jobs import (
     boundary,
@@ -215,8 +219,22 @@ def test_workers_claim_compatible_requests_under_one_slot_limit(
     assert not asyncio.run(worker.run_once())
     assert store.cancel(diagnostic["id"], owner)["status"] == "cancelling"
     assert not store.heartbeat(active["id"], active["attempt_id"], {})
+    assert not store.finish(active["id"], "stale-token", None)
     assert not asyncio.run(worker.run_once())
-    assert store.finish(active["id"], active["attempt_id"], None)
+    with psycopg.connect(store.conninfo, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            assert acknowledge_stopped_attempt(
+                cursor,
+                job_id=active["id"],
+                attempt_id=active["attempt_id"],
+                error={"code": "interrupted", "detail": "Worker stopped."},
+            )
+            # A cancelled subscriber sees "cancelled" for any terminal job outcome.
+            assert cursor.execute(
+                "SELECT status FROM processing.jobs WHERE id=%s", (active["id"],)
+            ).fetchone() == ("cancelled",)
+    assert store.get(diagnostic["id"], owner)["status"] == "cancelled"
+    assert not store.finish(active["id"], active["attempt_id"], None)
     assert store.claim_next_job(supported_operations=[operation]) is None
     assert asyncio.run(worker.run_once())
     result = client.get(f"/api/processing/jobs/{next_clip['jobId']}").json()
@@ -324,10 +342,24 @@ def test_release_wakes_idle_workers_before_fallback(store: PostgresJobStore) -> 
             await wakeup.arm()
             assert store.claim_next_job() is None
             waiter = asyncio.create_task(wakeup.wait(10))
-            await asyncio.to_thread(
-                store.finish, active["id"], active["attempt_id"], None
+            error = {"code": "read_failed", "detail": "The input could not be read."}
+            with psycopg.connect(store.conninfo) as connection:
+                with connection.cursor() as cursor:
+                    assert acknowledge_stopped_attempt(
+                        cursor,
+                        job_id=active["id"],
+                        attempt_id=active["attempt_id"],
+                        error=error,
+                    )
+                connection.rollback()
+            assert store.get(active["id"], "one")["status"] == "running"
+            assert store.claim_next_job() is None
+            assert await asyncio.to_thread(
+                store.finish, active["id"], active["attempt_id"], None, error
             )
             assert await asyncio.wait_for(waiter, 1)
+            failed = store.get(active["id"], "one")
+            assert (failed["status"], failed["error"]) == ("failed", error)
             assert store.claim_next_job() is not None
         finally:
             await wakeup.close()
@@ -632,6 +664,7 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
                 )
             await worker.cleanup()
             assert checkpoint.exists()
+            assert store.recover_unstarted_claim(uuid4().hex) is None
             assert native_pid in {child.pid for child in active_children()}
             assert store.claim_next_job() is None
             allow_heartbeat_failure.set()

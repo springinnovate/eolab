@@ -41,18 +41,18 @@ const rainfallWindow = Object.fromEntries(years.map(year => [year, `${year - 9}�
 
 const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
     grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}, datasets: [
-        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"], requiredRoles: [],
+        {id: "era5_daily", label: "ERA5 daily aggregates", url: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_DAILY", roles: ["predictor"],
             inputsByRole: {predictor: [
                 {variable: "Annual precipitation", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: annual},
                 {variable: "Growing season climate", bands: ["mean_2m_air_temperature", "total_precipitation"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: growingSeason},
                 {variable: "Rainfall variability", bands: ["total_precipitation"], requiredDatasets: ["era5_daily"], periods: rainfallWindow},
             ]}},
-        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"], requiredRoles: [],
+        {id: "modis_phenology", label: "MODIS phenology", url: "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q2", roles: ["predictor", "response"],
             inputsByRole: {predictor: [{variable: "Growing season climate", bands: ["Greenup_1", "Senescence_1"], requiredDatasets: ["era5_daily", "modis_phenology"], periods: annual}],
                 response: [{variable: "Growing cycles", bands: ["NumCycles"], requiredDatasets: ["modis_phenology"], periods: annual}]}},
-        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"], requiredRoles: [],
+        {id: "landsat_ndvi", label: "Landsat NDVI", url: "https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_COMPOSITES_C02_T1_L2_8DAY_NDVI", roles: ["response"],
             inputsByRole: {response: ["NDVI 95th percentile", "NDVI median"].map(variable => ({variable, bands: ["NDVI"], requiredDatasets: ["landsat_ndvi"], periods: annual}))}},
-        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"], requiredRoles: ["predictor"],
+        {id: "srtm_landforms", label: "SRTM landforms", url: "https://developers.google.com/earth-engine/datasets/catalog/CSP_ERGo_1_0_Global_SRTM_landforms", roles: ["predictor"],
             inputsByRole: {predictor: [{variable: "Landform class", bands: ["constant"], requiredDatasets: ["srtm_landforms"],
                 periods: Object.fromEntries(years.map(year => [year, "Fixed map for every assessment year"]))}]}},
     ]};
@@ -266,14 +266,18 @@ test("Habitat starts with all datasets selected in collapsed role groups", async
         for (const dataset of datasets) {
             const controls = group.controls.get(dataset.id);
             assert.equal(controls.checkbox.checked, true);
-            assert.equal(controls.checkbox.disabled, dataset.requiredRoles.includes(role));
+            assert.ok(!controls.checkbox.disabled);
             assert.equal(controls.label.textContent, dataset.label);
             assert.equal(controls.link.href, dataset.url);
             assert.equal(controls.link.getAttribute("aria-label"), `Source information for ${dataset.label}`);
             assert.notEqual(controls.link.parentElement, controls.checkbox.parentElement, "Source links are outside the checkbox label");
         }
     }
-    assert.equal(stack.datasetGroups.predictor.controls.get("srtm_landforms").required.hidden, false);
+    const landform = stack.datasetGroups.predictor.controls.get("srtm_landforms");
+    setCheckbox(landform.checkbox, false);
+    assert.ok(!h.controller.state.draft.inputs.stack.predictorDatasets.includes("srtm_landforms"));
+    assert.equal(landform.details.textContent, "Excluded from this analysis.");
+    setCheckbox(landform.checkbox, true);
     const phenology = stack.datasetGroups.predictor.controls.get("modis_phenology");
     const response = stack.datasetGroups.response.controls.get("modis_phenology");
     assert.doesNotMatch(phenology.details.textContent, /2001–2024/, "Only dates used for this assessment belong in the row");
@@ -506,8 +510,10 @@ test("Habitat stack edits preserve other rows and require unambiguous roles befo
     assert.deepEqual(stack.responses, [{name: "productivity", source: {collectionId: h.context.rasters[2].collectionId, itemId: h.context.rasters[2].itemId}}]);
     assert.equal(stack.predictors[0].name, "environment"); assert.equal(stack.categoricalPredictor, "land_class");
     controls.predictors[1].remove.dispatchEvent(new Event("click"));
-    assert.equal(h.view.setup.run.disabled, true);
-    assert.throws(() => captureModelSubmission(h.controller.state.draft, "removed-category"), /categorical/i);
+    assert.equal(h.view.setup.run.disabled, false);
+    const continuous = captureModelSubmission(h.controller.state.draft, "removed-category").inputs.stack;
+    assert.deepEqual(continuous.predictors, stack.predictors.slice(0, 1));
+    assert.equal(continuous.categoricalPredictor, null);
     h.controller.destroy();
 });
 
@@ -1099,7 +1105,13 @@ test("one drawn layer used for both inputs uploads once and duplication keeps th
     const layer = drawnPolygonLayer("Forest", 2);
     const h = await fixture({drawings: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
     for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `vector:${layer.key}`);
-    await h.controller.submit();
+    let accept;
+    h.api.submitModelRun = request => { h.requests.push(request); return new Promise(resolve => { accept = resolve; }); };
+    const submitting = h.controller.submit();
+    assert.equal(h.view.setup.run.textContent, "Saving drawn polygons…");
+    await settle();
+    assert.equal(h.view.elements["recovery-message"].textContent, "Starting run “Ecosystem Condition”…");
+    accept(job({model: habitat})); await submitting;
     assert.equal(h.uploads.length, 1);
     assert.deepEqual(h.requests[0].inputs.area.selection, h.requests[0].inputs.references.selection);
     h.context.drawings = [];
@@ -1183,6 +1195,81 @@ test("an expired selected reference output stays identified and explained by the
     assert.equal(h.requests.length, 0);
 });
 
+
+test("Run immediately identifies the prepared area and year through rejection, correction and acceptance", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    let now = 8000;
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({apis: ["setInterval"]});
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h, 1);
+    edit(h.view.setup.inputs.stack.year, "2019"); await settle();
+    let accept, reject;
+    h.api.submitModelRun = request => {
+        h.requests.push(request);
+        return new Promise((resolve, fail) => { accept = resolve; reject = fail; });
+    };
+    const run = h.view.setup.run, status = h.view.elements["recovery-message"];
+    const areaLabel = h.view.setup.inputs.area.preparationSelection.source.children[2].textContent;
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true}));
+    assert.equal(run.textContent, "Checking prepared inputs…");
+    assert.equal(status.textContent, `Checking prepared inputs for ${areaLabel} (assessment year 2019)…`);
+    assert.equal(run.disabled, true);
+    const elapsed = h.view.elements["submission-elapsed"];
+    assert.equal(elapsed.hidden, false);
+    assert.equal(elapsed.textContent, "Waited 0 sec");
+    now += 6500; t.mock.timers.tick(1000);
+    assert.equal(elapsed.textContent, "Waited 6 sec");
+    h.controller.setActive(false);
+    now += 60000; t.mock.timers.tick(1000);
+    assert.equal(elapsed.hidden, true); assert.equal(elapsed.textContent, "Waited 6 sec");
+    h.controller.setActive(true);
+    assert.equal(elapsed.textContent, "Waited 1 min 6 sec");
+    assert.equal(h.controller.state.runs.length, 0);
+    reject(new ProcessingRequestError("Prepared inputs are unavailable for this area and year.", 409)); await settle();
+    assert.equal(h.view.elements.error.textContent, "Prepared inputs are unavailable for this area and year.");
+    assert.equal(elapsed.hidden, true); assert.equal(status.textContent, "");
+    assert.equal(run.disabled, false); assert.equal(h.view.elements.recover.hidden, true);
+    await choosePreparationSelection(h, 0);
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true}));
+    assert.match(status.textContent, /BASIN equals "North"/);
+    assert.equal(elapsed.textContent, "Waited 0 sec");
+    accept(job({model: habitat})); await settle();
+    assert.equal(h.controller.state.page, "run");
+    assert.equal(h.view.run.status.textContent, "Queued");
+    assert.equal(status.textContent, ""); assert.equal(elapsed.hidden, true);
+    assert.equal(h.controller.state.runs.length, 1);
+    assert.notEqual(h.requests[0].requestId, h.requests[1].requestId);
+});
+
+test("prepared-input recovery confirms the saved request when the first acceptance reply was lost", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h);
+    const accepted = new Map(); let finishRetry;
+    h.api.submitModelRun = async request => {
+        h.requests.push(structuredClone(request));
+        if (accepted.has(request.requestId)) {
+            await new Promise(resolve => { finishRetry = resolve; });
+            return accepted.get(request.requestId);
+        }
+        accepted.set(request.requestId, job({model: habitat}));
+        throw new TypeError("Connection lost");
+    };
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true})); await settle();
+    const retry = h.view.elements.recover;
+    assert.equal(retry.hidden, false);
+    retry.dispatchEvent(new Event("click")); retry.dispatchEvent(new Event("click"));
+    assert.equal(h.view.elements["recovery-message"].textContent, "Confirming whether “Ecosystem Condition” started…");
+    assert.equal(h.requests.length, 2);
+    finishRetry(); await settle();
+    assert.deepEqual(h.requests[1], h.requests[0]);
+    assert.equal(accepted.size, 1);
+    assert.equal(h.controller.state.runs.length, 1);
+    assert.equal(h.controller.state.selectedRun, accepted.get(h.requests[0].requestId).jobId);
+    assert.equal(h.view.run.status.textContent, "Queued");
+    assert.equal(h.view.elements["submission-elapsed"].hidden, true);
+});
 
 test("Earth Engine preparation selections are independent of Map layers, manual area choices and reference filters", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());

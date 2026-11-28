@@ -402,7 +402,10 @@ class JobStore(Protocol):
         ...
 
     def claim_next_job(
-        self, *, supported_operations: list[str] | None = None
+        self,
+        *,
+        supported_operations: list[str] | None = None,
+        attempt_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Claim the oldest compatible request for the next eligible session.
 
@@ -415,9 +418,29 @@ class JobStore(Protocol):
         Args:
             supported_operations: Operation IDs the worker can execute. An empty list
                 claims nothing. None selects across all operations.
+            attempt_id: Fresh worker-chosen token for recovering an unanswered claim.
+                When omitted, storage assigns the token.
 
         Returns:
             Claimed job, or None when no eligible work or worker slot is available.
+
+        Raises:
+            ProcessingError: If storage cannot confirm the claim outcome.
+        """
+        ...
+
+    def recover_unstarted_claim(self, attempt_id: str) -> dict[str, Any] | None:
+        """Recover this worker's unanswered claim before it starts native work.
+
+        Args:
+            attempt_id: Token used by this lane for the claim whose reply was lost.
+
+        Returns:
+            The committed job with a renewed lease, or None if the claim rolled back,
+            is no longer active, or was finished after cancellation or lease expiry.
+
+        Raises:
+            ProcessingError: If storage cannot confirm recovery. Retry the same token.
         """
         ...
 

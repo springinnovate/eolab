@@ -19,7 +19,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
-from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
+from eolab_jobs.job_notifications import JOB_QUEUE_CHANNEL
 
 from eolab_app.processing.models import (
     MAX_STAGED_INPUT_BYTES,
@@ -31,7 +31,12 @@ from eolab_app.processing.models import (
     JobInputFile,
     JobInputReference,
 )
-from eolab_jobs.worker_claim import claim_next_job, lock_job_queue, renew_job_lease
+from eolab_jobs.worker_claim import (
+    acknowledge_stopped_attempt,
+    claim_next_job,
+    lock_job_queue,
+    renew_job_lease,
+)
 
 UNFINISHED = ("queued", "running", "cancelling")
 
@@ -1233,7 +1238,10 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def claim_next_job(
-        self, *, supported_operations: list[str] | None = None
+        self,
+        *,
+        supported_operations: list[str] | None = None,
+        attempt_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Claim the next eligible session's job when a shared worker slot is available.
 
@@ -1248,6 +1256,8 @@ class PostgresJobStore:
         Args:
             supported_operations: Operation IDs the worker can execute. An empty list
                 claims nothing. None selects across all operations.
+            attempt_id: Fresh token supplied by the worker for lost-reply recovery.
+                When omitted, the scheduler assigns the token.
 
         Returns:
             Claimed job with a new attempt token, or None when no slot or eligible
@@ -1263,6 +1273,7 @@ class PostgresJobStore:
                 worker_count=self.limits.worker_count,
                 lease_seconds=self.limits.lease_seconds,
                 supported_operations=supported_operations,
+                attempt_id=attempt_id,
             )
             if row is not None:
                 cursor.execute(
@@ -1301,6 +1312,51 @@ class PostgresJobStore:
             )
         return {row["id"]: row["payload"] for row in rows}
 
+    def recover_unstarted_claim(self, attempt_id: str) -> dict[str, Any] | None:
+        """Recover a claim whose reply was lost before this lane launched native work.
+
+        Take the queue lock before looking up the token so the original claim's
+        commit or rollback is visible. Only this lane can certify that its native
+        work never started and safely finish its cancelled or expired attempt.
+
+        Args:
+            attempt_id: Fresh token the worker supplied for the unanswered claim.
+
+        Returns:
+            The job to execute after renewing its lease, or None when this attempt
+            has no work left to run.
+
+        Raises:
+            ProcessingError: If the database cannot confirm the claim outcome.
+        """
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT * FROM processing.jobs WHERE attempt_id=%s "
+                "AND status IN ('running','cancelling')",
+                (attempt_id,),
+            )
+            job = cursor.fetchone()
+            if job is None:
+                return None
+            if renew_job_lease(
+                cursor,
+                job_id=job["id"],
+                attempt_id=attempt_id,
+                lease_seconds=self.limits.lease_seconds,
+                progress={},
+            ):
+                return job
+            acknowledge_stopped_attempt(
+                cursor,
+                job_id=job["id"],
+                attempt_id=attempt_id,
+                error={
+                    "code": "interrupted",
+                    "detail": "The job was cancelled or its worker lease ended before execution.",
+                },
+            )
+            return None
+
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]
     ) -> bool:
@@ -1336,7 +1392,7 @@ class PostgresJobStore:
         error: dict[str, str] | None = None,
         reusable_results: dict[str, dict[str, object]] | None = None,
     ) -> bool:
-        """Publish completed work and cache values only while this attempt owns the job.
+        """Publish the result or record why the worker stopped without one.
 
         Results use the lifetime captured by the operation at admission, when
         supplied; ordinary jobs retain the deployment's result lifetime. Captured
@@ -1345,7 +1401,8 @@ class PostgresJobStore:
         Args:
             identifier: Running job.
             attempt: Execution fencing token.
-            artifact: Atomically published immutable result, or None on failure.
+            artifact: Atomically published immutable result, or None after native
+                exit on failure, interruption or cancellation.
                 Manifest-backed results record the retained bytes of every file and the inventory.
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
@@ -1358,15 +1415,15 @@ class PostgresJobStore:
             ProcessingError: If durable storage is unavailable.
             ValidationError: If the supplied manifest violates its storage contract.
         """
-        with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(
-                "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
-                (identifier, attempt),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return False
-            if artifact is not None:
+        if artifact is not None:
+            with self._transaction(acquire_lock=True) as cursor:
+                cursor.execute(
+                    "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s AND status IN ('running','cancelling') FOR UPDATE",
+                    (identifier, attempt),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False
                 retained_bytes = artifact.size
                 if artifact.manifest is not None:
                     retained_bytes = read_artifact_manifest(
@@ -1414,20 +1471,10 @@ class PostgresJobStore:
                         (self.limits.calculation_cache_capacity,),
                     )
                 return completed
-            status = (
-                "cancelled"
-                if row["status"] == "cancelling"
-                else (
-                    "interrupted"
-                    if error and error.get("code") == "interrupted"
-                    else "failed"
-                )
+        with self._transaction() as cursor:
+            return acknowledge_stopped_attempt(
+                cursor, job_id=identifier, attempt_id=attempt, error=error
             )
-            cursor.execute(
-                "UPDATE processing.jobs SET status=%s,error=%s,updated_at=now() WHERE id=%s",
-                (status, Jsonb(error), identifier),
-            )
-            return True
 
     def get_cached_calculation_results(
         self, keys: list[str]

@@ -1353,6 +1353,7 @@ test("run sending and uncertain recovery name the original request through reloa
     assert.equal(view.setup.run.textContent, "Starting run…");
     assert.equal(view.elements["recovery-message"].textContent, "Starting run “KAZA 2018”…");
     assert.match(SUMMARY_MARKUP, /id="models-recovery-message"[^>]*role="status"/);
+    assert.match(SUMMARY_MARKUP, /id="models-submission-elapsed"[^>]*role="timer"[^>]*aria-live="off"/);
     assert.equal(view.elements.error.hidden, true);
     assert.equal(view.elements.recover.hidden, true);
     loseResponse(new TypeError("Connection lost")); await sending;
@@ -1377,7 +1378,7 @@ test("run sending and uncertain recovery name the original request through reloa
     const retry = nextView.elements.recover;
     retry.focus();
     const retrying = next.controller.submit(true);
-    assert.equal(nextView.elements["recovery-message"].textContent, "Starting run “KAZA 2018”…");
+    assert.equal(nextView.elements["recovery-message"].textContent, "Confirming whether “KAZA 2018” started…");
     assert.equal(retry.hidden, false);
     assert.equal(retry.disabled, false, "native disabled would remove keyboard focus");
     assert.equal(retry.getAttribute("aria-disabled"), "true");

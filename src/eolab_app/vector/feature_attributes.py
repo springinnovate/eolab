@@ -158,6 +158,35 @@ def _read_feature_attributes(
             limits do not apply because native geometry is not decoded.
     """
     try:
+        result = collect_feature_attributes(target, feature_ids, limits)
+    except (GeometryValidationError, SelectionUnavailableError) as error:
+        writer.put((None, str(error)))
+        return
+    writer.put((result, None))
+
+
+def collect_feature_attributes(
+    target: ResolvedCatalogSelection,
+    feature_ids: tuple[int, ...],
+    limits: VectorReadLimits,
+) -> FeatureAttributesResult:
+    """Read complete, ordered scalar rows inside an already supervised worker.
+
+    Args:
+        target: Authorized original file with its exact predicate bound.
+        feature_ids: Unique native IDs in the caller's requested order.
+        limits: Interactive feature, memory and time budgets.
+
+    Returns:
+        Every requested row with its original source descriptor.
+
+    Raises:
+        GeometryValidationError: The read exceeds a work, memory or response budget.
+        SelectionUnavailableError: The source or a selected feature is unavailable.
+    """
+    if not feature_ids:
+        return FeatureAttributesResult(selection=target.selection, features=())
+    try:
         with _limit_memory(limits.memory_bytes):
             features: list[FeatureAttributes] = []
             envelope = FeatureAttributesResult(selection=target.selection, features=())
@@ -194,16 +223,10 @@ def _read_feature_attributes(
                 raise SelectionUnavailableError(
                     "Some selected features do not match this layer's filter. Select the features again."
                 )
-            result = FeatureAttributesResult(
+            return FeatureAttributesResult(
                 selection=target.selection, features=tuple(features)
             )
-        writer.put((result, None))
-    except (GeometryValidationError, SelectionUnavailableError) as error:
-        writer.put((None, str(error)))
-    except MemoryError:
-        writer.put(
-            (
-                None,
-                "Feature attributes could not fit in memory. Select fewer features and try again.",
-            )
-        )
+    except MemoryError as error:
+        raise GeometryValidationError(
+            "Feature attributes could not fit in memory. Select fewer features and try again."
+        ) from error

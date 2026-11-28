@@ -78,7 +78,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     import_retained_habitat_preparation_selections,
 )
 from eolab_app.processing.habitat_models import OPERATION as HABITAT_CONDITION_OPERATION
-from eolab_app.processing.job_notifications import PostgresJobWakeup
+from eolab_jobs.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.job_events import PostgresJobEvents
@@ -314,7 +314,11 @@ def create_app(
         vector_source_resolver,
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
-        comparison_executor=lambda token: compare_selection_job(vector_jobs, token),
+        comparison_executor=partial(
+            compare_selection_job,
+            vector_jobs,
+            max_timeout_seconds=app_global_configuration.jobs_max_timeout_seconds,
+        ),
         extent_executor=ExtentJobs(vector_jobs),
         parcel_executor=ParcelJobs(vector_jobs),
         layer_statistics_executor=LayerStatisticsJobs(vector_jobs),

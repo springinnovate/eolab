@@ -1,5 +1,6 @@
-"""Serialize queue decisions, claim worker slots and renew running attempts' leases."""
+"""Serialize queue decisions and manage workers' claims, leases and stopped attempts."""
 
+from contextlib import nullcontext
 from typing import Any, Final
 from uuid import uuid4
 
@@ -46,7 +47,7 @@ RETURNING job.*, next_job.owner
 """
 
 
-def lock_job_queue(cursor: psycopg.Cursor[dict[str, Any]]) -> None:
+def lock_job_queue(cursor: psycopg.Cursor[Any]) -> None:
     """Serialize queue decisions until the caller's transaction ends.
 
     Args:
@@ -64,6 +65,7 @@ def claim_next_job(
     worker_count: int,
     lease_seconds: int,
     supported_operations: list[str] | None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Claim a compatible job for the next session under the shared worker limit.
 
@@ -77,6 +79,9 @@ def claim_next_job(
         lease_seconds: Initial lease duration measured from the recorded start.
         supported_operations: Operation IDs this worker can execute. An empty list
             claims nothing. None selects across all operations.
+        attempt_id: Fresh execution token chosen by the worker before this call so
+            it can identify a committed claim if the reply is lost. When omitted,
+            the scheduler generates the token.
 
     Returns:
         The running job row with its selected owner and new attempt ID, or None
@@ -93,7 +98,7 @@ def claim_next_job(
         cursor.execute(
             _CLAIM_NEXT_JOB_SQL,
             {
-                "attempt_id": uuid4().hex,
+                "attempt_id": uuid4().hex if attempt_id is None else attempt_id,
                 "lease_seconds": lease_seconds,
                 "supported_operations": supported_operations,
             },
@@ -153,3 +158,54 @@ def renew_job_lease(
         },
     )
     return cursor.rowcount == 1
+
+
+def acknowledge_stopped_attempt(
+    cursor: psycopg.Cursor[Any],
+    *,
+    job_id: str,
+    attempt_id: str,
+    error: dict[str, str] | None = None,
+) -> bool:
+    """Release a worker slot after native work stopped without a successful result.
+
+    The supervisor must confirm that no native work for this attempt is still
+    running, even if its lease expired. A cancelling job becomes cancelled.
+    A running job becomes interrupted for the error code `interrupted` or
+    failed otherwise. Committing releases the slot and retained inputs and
+    wakes waiting workers. On a regular connection the caller commits or rolls
+    back. An autocommit connection groups the queue lock and update in one
+    transaction.
+
+    Args:
+        cursor: Open cursor on the queue database at read committed isolation.
+        job_id: Identifier of the claimed job.
+        attempt_id: Token returned when the worker claimed the job.
+        error: Sanitized error details to retain, or None when none were reported.
+
+    Returns:
+        True if this attempt became terminal. False for a missing, superseded
+        or already finished attempt.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot lock the queue or record the stop.
+    """
+    connection = cursor.connection
+    transaction = connection.transaction() if connection.autocommit else nullcontext()
+    with transaction:
+        lock_job_queue(cursor)
+        cursor.execute(
+            """
+            UPDATE processing.jobs
+            SET status = CASE
+                    WHEN status = 'cancelling' THEN 'cancelled'
+                    WHEN %(error)s::jsonb ->> 'code' = 'interrupted' THEN 'interrupted'
+                    ELSE 'failed'
+                END,
+                error = %(error)s, updated_at = clock_timestamp()
+            WHERE id = %(job_id)s AND attempt_id = %(attempt_id)s
+              AND status IN ('running', 'cancelling')
+            """,
+            {"job_id": job_id, "attempt_id": attempt_id, "error": Jsonb(error)},
+        )
+        return cursor.rowcount == 1
