@@ -118,6 +118,11 @@ from eolab_app.catalog_selection import (
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.upload_storage import UploadStorage, UploadRecord, UploadError
 
+ReceiveModelInputs = Callable[
+    [dict[str, JobInputReference]], Awaitable[tuple[JobInputDocument, ...]]
+]
+"""Read the attachments for the private source IDs declared by a model invocation."""
+
 HABITAT_PREPARATION_OPERATIONS = (
     HABITAT_PREPARATION_OPERATION,
     HABITAT_BULK_PREPARATION_OPERATION,
@@ -785,13 +790,7 @@ class ProcessingService:
         request: ModelRunRequest,
         upload_owner: str | None = None,
         *,
-        receive_inputs: (
-            Callable[
-                [dict[str, JobInputReference]],
-                Awaitable[tuple[JobInputDocument, ...]],
-            ]
-            | None
-        ) = None,
+        receive_inputs: ReceiveModelInputs | None = None,
     ) -> dict[str, Any]:
         """Start a model run, or recover a previously accepted submission.
 
@@ -819,9 +818,38 @@ class ProcessingService:
         """
         request_data = request.model_dump(mode="json", exclude={"requestId"})
         request_hash = hashlib.sha256(encode_canonical_json(request_data)).hexdigest()
-        existing = await asyncio.to_thread(
-            self.jobs.find_request, owner, request.requestId
-        )
+        existing = await self._accepted_model_run(owner, request.requestId, request_hash)
+        if existing is not None:
+            return existing
+        try:
+            return await self._admit_model_run(
+                owner, request.model_copy(update={"inputs": request_data["inputs"]}),
+                request_hash, upload_owner, receive_inputs,
+            )
+        except Exception:
+            # A concurrent copy can commit while this request is still reading a source.
+            existing = await self._accepted_model_run(owner, request.requestId, request_hash)
+            if existing is not None:
+                return existing
+            raise
+
+    async def _accepted_model_run(
+        self, owner: str, request_id: str, request_hash: str
+    ) -> dict[str, Any] | None:
+        """Recover an accepted job for this session and these exact submitted inputs.
+
+        Args:
+            owner: Processing session identity.
+            request_id: Client's retry identifier.
+            request_hash: Checksum of the submitted invocation.
+
+        Returns:
+            Public job details, or None if the request has not committed.
+
+        Raises:
+            ProcessingError: The request ID belongs to different work or inputs.
+        """
+        existing = await asyncio.to_thread(self.jobs.find_request, owner, request_id)
         if existing is not None:
             require_operation(existing, MODEL_OPERATION)
             if existing["request_hash"] != request_hash:
@@ -831,11 +859,30 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        inputs = request_data["inputs"]
-        saved_filters = bind_saved_drawing_filters(inputs)
-        calculation, invocation = build_model_calculation_request(
-            request.model_copy(update={"inputs": inputs}), self.model_registry
-        )
+        return None
+
+    async def _admit_model_run(
+        self, owner: str, request: ModelRunRequest, request_hash: str,
+        upload_owner: str | None, receive_inputs: ReceiveModelInputs | None,
+    ) -> dict[str, Any]:
+        """Prepare the selected sources and atomically retain them with the new job.
+
+        Args:
+            owner: Processing session identity.
+            request: Invocation with detached inputs for binding private sources.
+            request_hash: Identity of the request before binding sources.
+            upload_owner: Session authorized to use the uploaded originals.
+            receive_inputs: Reader for any attached drawing documents.
+
+        Returns:
+            Public job details after admission commits.
+
+        Raises:
+            ProcessingError: The invocation or its sources cannot be admitted.
+            RasterFeatureError: A raster cannot be authorized.
+        """
+        saved_filters = bind_saved_drawing_filters(request.inputs)
+        calculation, invocation = build_model_calculation_request(request, self.model_registry)
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         timing_work = None
         if operation.before_queue is not None:

@@ -1,9 +1,12 @@
 """Run vector summaries through real source, HTTP, PostgreSQL and native worker boundaries."""
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+from threading import Event
 from typing import Any
 from uuid import uuid4
 
@@ -492,6 +495,45 @@ def test_duplicate_preserves_drawing_intersection(
             )
             results.append(raster.read(1))
     numpy.testing.assert_array_equal(*results)
+
+
+def test_overlapping_retry_returns_job_accepted_before_source_error(model_boundary: Any) -> None:
+    """Return the same accepted run when a concurrent read sees a newer drawing revision.
+
+    Args:
+        model_boundary: Actual model routes, PostgreSQL queue and native worker.
+    """
+    client, worker, service = model_boundary
+    geometry = rectangle(0.1, 9.1, 0.3, 9.3)
+    target = capture_drawing(client, geometry)
+    target["filter"] = {"rules": [{"operator": "intersects", "layerId": str(uuid4()),
+        "source": {"kind": "drawing", "polygonArea": {
+            "drawingLayerId": str(uuid4()), "revision": 1, "featureIds": ["site"]}}}]}
+    request = model_request(client, "raster-clip", inputs={
+        "raster": SOURCE, "area": {"kind": "catalogSelection", "selection": target}})
+    reading, committed = Event(), Event()
+
+    async def read_revision(owner: str, reference: DrawingReference) -> tuple[SummaryPolygon, ...]:
+        """Keep one source read in flight until the identical submission commits."""
+        if not reading.is_set():
+            reading.set()
+            assert await asyncio.to_thread(committed.wait, 20)
+            raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+        return (SummaryPolygon.model_validate(geometry),)
+
+    service.read_filter_drawing = read_revision
+    with ThreadPoolExecutor(1) as pool:
+        delayed = pool.submit(client.post, "/api/processing/model-runs", json=request, headers=HEADERS)
+        try:
+            assert reading.wait(10)
+            accepted = submit(client, request)
+        finally:
+            committed.set()
+        reply = delayed.result(10)
+    assert reply.status_code == 202, reply.text
+    assert reply.json()["jobId"] == accepted["jobId"]
+    assert client.portal.call(worker.run_once)
+    assert client.get("/api/processing/jobs/" + accepted["jobId"]).json()["status"] == "ready"
 
 
 def test_clip_pixels_match_for_all_four_vector_sources(
