@@ -1,6 +1,27 @@
 /** Present Catalog preparation selections and their current coverage in Habitat setup. */
 import { vectorSelectionsEqual } from "../selected-area.js";
 
+/** Label prepared areas for both the chooser and its submitted selection.
+ * @param {Object} state Preparation selections and Catalog titles from the Habitat draft.
+ * @param {{sourceKey:(source:Object)=>string,describeFilter:(filter:Object)=>string}} helpers Ordinary source identity and filter descriptions.
+ * @return {{label:string,details:string}[]} Choices in selection order, identifying the source when visible names coincide.
+ */
+export function describePreparationAreas(state, {sourceKey, describeFilter}) {
+    const labels = state.selections.map(selection => {
+        const title = state.titles[sourceKey(selection)];
+        const name = title && title !== selection.itemId ? title : selection.layerName;
+        const layerAlreadyNamed = name === selection.layerName || name.endsWith(` — ${selection.layerName}`);
+        return [name, layerAlreadyNamed ? null : selection.layerName, describeFilter(selection.filter)]
+            .filter(part => part !== null).join(" · ");
+    });
+    const counts = new Map();
+    for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+    return state.selections.map(({collectionId, itemId, assetKey}, index) => {
+        const label = labels[index], details = `${label} · Source: ${collectionId} / ${itemId} / ${assetKey}`;
+        return {label: counts.get(label) > 1 ? details : label, details};
+    });
+}
+
 /** Keep Catalog preparation choices separate from manual area and reference controls. */
 export class HabitatPreparationSelectionView {
     /** Create the area chooser, map outline toggle and coverage status.
@@ -47,21 +68,10 @@ export class HabitatPreparationSelectionView {
         const value = draft.setupState;
         this.selections = value.selections;
         const selectedIndex = value.selections.findIndex(selection => vectorSelectionsEqual(selection, value.selectedSelection));
-        const identities = value.selections.map(selection =>
-            `${selection.collectionId} / ${selection.itemId} / ${selection.assetKey}`);
-        const labels = value.selections.map(selection => {
-            const title = value.titles[this.sourceKey(selection)];
-            const name = title && title !== selection.itemId ? title : selection.layerName;
-            const layerAlreadyNamed = name === selection.layerName || name.endsWith(` — ${selection.layerName}`);
-            return [name, layerAlreadyNamed ? null : selection.layerName, this.describeFilter(selection.filter)]
-                .filter(part => part !== null).join(" · ");
-        });
-        const labelCounts = new Map();
-        for (const label of labels) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+        const areas = describePreparationAreas(value, this);
         this.options(this.source, [{value: "", label: "Choose an area…"},
-            ...labels.map((label, index) => ({value: String(index),
-                label: labelCounts.get(label) > 1 ? `${label} · Source: ${identities[index]}` : label}))], selectedIndex < 0 ? "" : String(selectedIndex));
-        this.selectionDetails.textContent = selectedIndex < 0 ? "" : `${labels[selectedIndex]} · Source: ${identities[selectedIndex]}`;
+            ...areas.map(({label}, index) => ({value: String(index), label}))], selectedIndex < 0 ? "" : String(selectedIndex));
+        this.selectionDetails.textContent = selectedIndex < 0 ? "" : areas[selectedIndex].details;
         this.sourceDetails.hidden = selectedIndex < 0;
         this.source.disabled = value.loading || !value.loaded || Boolean(value.error) || !value.selections.length;
         this.outline.disabled = this.source.disabled || selectedIndex < 0;

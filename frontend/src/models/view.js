@@ -62,8 +62,8 @@ export class ModelsView {
     constructor(documentContext = globalThis.document, {getSetupIntegration = getModelSetupIntegration} = {}) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
         this.getSetupIntegration = getSetupIntegration;
-        this.deletionNotices = new Map();
-        this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recovery-message", "recover", "query",
+        this.deletionNotices = new Map(); this.waitStarted = null; this.waitTimer = null;
+        this.elements = Object.fromEntries(["page", "setup-heading", "close", "library", "setup", "run", "runs", "error", "feedback-home", "feedback", "recovery", "recovery-message", "submission-elapsed", "recover", "query",
             "library-items", "library-status", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
@@ -501,7 +501,7 @@ export class ModelsView {
         }
         const supported = Object.values(draft.model.inputs).every(input => supportsModelInput(input.type));
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
-        setupControls.run.textContent = state.submitting ? "Starting run…" : runLabel;
+        setupControls.run.textContent = state.submissionWait?.buttonLabel ?? runLabel;
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         setupControls.details.run.hidden = true;
         setupControls.details.message.textContent = supported ? `Model version ${draft.model.version}. Results are temporary.` : "This tool requires input controls not yet available in this interface.";
@@ -786,20 +786,49 @@ export class ModelsView {
         const error = state.error || (state.page === "setup" ? "" : pageError || state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.renderDeletions(state.deletions ?? []);
-        this.elements.recovery.hidden = !state.pending;
-        this.elements.recover.setAttribute("aria-disabled", String(state.submitting));
-        if (!state.submitting) this.elements.recover.hidden = !state.pending;
-        const recoveryMessage = !state.pending ? "" : state.submitting ? `Starting run “${state.pending.label}”…`
-            : `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.`;
-        if (this.elements["recovery-message"].textContent !== recoveryMessage) this.elements["recovery-message"].textContent = recoveryMessage;
         this.renderLibraryItems(state.library, state.query);
         let libraryStatus = this.elements["library-items"].children.length || state.libraryError ? "" : "No matching tools.";
         if (state.noModelsSelected) libraryStatus = "This map offers no models for new runs. Choose Runs to view earlier work.";
         if (state.missingModels) libraryStatus = "A model selected for this map is unavailable on this site. Ask the map publisher to review the choices.";
         this.elements["library-status"].textContent = state.loading ? "Loading data tools…" : libraryStatus;
-        this.renderSetup(state); this.renderRun(state);
+        this.renderSetup(state); this.renderSubmissionStatus(state); this.renderRun(state);
         if (state.active && state.page === "runs") this.renderRunHistory(state);
         this.elements.yaml.hidden = !state.yaml; this.elements.yaml.textContent = state.yaml ?? "";
+    }
+
+    /** Show the current submission or recovery action next to its control.
+     * Keep the live message stable as the elapsed timer ticks. Time spent with
+     * Data tools closed counts toward the wait when the user returns.
+     * @param {Object} state Controller snapshot, including any pre-acceptance action.
+     * @return {void}
+     */
+    renderSubmissionStatus(state) {
+        const feedback = this.elements.feedback;
+        const host = state.page === "setup" && this.setup ? this.setup.form : this.elements["feedback-home"];
+        if (feedback.parentElement !== host) host.append(feedback);
+        const wait = state.submissionWait, status = this.elements["recovery-message"];
+        this.elements.recovery.hidden = !wait && !state.pending;
+        const retry = this.elements.recover;
+        retry.setAttribute("aria-disabled", String(state.submitting));
+        if (!state.submitting) retry.hidden = !state.pending;
+        const message = wait?.message ?? (state.pending
+            ? `We couldn’t confirm whether “${state.pending.label}” started. Retrying uses the same inputs.` : "");
+        if (status.textContent !== message) status.textContent = message;
+
+        const elapsed = this.elements["submission-elapsed"];
+        if (wait) this.waitStarted ??= performance.now();
+        else this.waitStarted = null;
+        elapsed.hidden = !wait || !state.active;
+        if (elapsed.hidden) {
+            clearInterval(this.waitTimer); this.waitTimer = null;
+        } else if (this.waitTimer === null) {
+            const update = () => {
+                const seconds = Math.floor((performance.now() - this.waitStarted) / 1000);
+                const minutes = Math.floor(seconds / 60);
+                elapsed.textContent = `Waited ${minutes ? `${minutes} min ` : ""}${seconds % 60} sec`;
+            };
+            update(); this.waitTimer = setInterval(update, 1000);
+        }
     }
 
     /** Show the latest run names, progress and order, and update the history controls.
@@ -835,6 +864,7 @@ export class ModelsView {
      * @return {void}
      */
     destroy() {
+        clearInterval(this.waitTimer);
         for (const controls of Object.values(this.setup?.inputs ?? {})) controls.dispose?.();
         this.tabStrip.destroy();
         for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback);

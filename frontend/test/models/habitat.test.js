@@ -1094,7 +1094,13 @@ test("one drawn layer used for both inputs uploads once and duplication keeps th
     const layer = drawnPolygonLayer("Forest", 2);
     const h = await fixture({drawnPolygonLayers: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
     for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `drawn:${layer.key}`);
-    await h.controller.submit();
+    let accept;
+    h.api.submitModelRun = request => { h.requests.push(request); return new Promise(resolve => { accept = resolve; }); };
+    const submitting = h.controller.submit();
+    assert.equal(h.view.setup.run.textContent, "Saving drawn polygons…");
+    await settle();
+    assert.equal(h.view.elements["recovery-message"].textContent, "Starting run “Ecosystem Condition”…");
+    accept(job({model: habitat})); await submitting;
     assert.equal(h.uploads.length, 1);
     assert.deepEqual(h.requests[0].inputs.area, h.requests[0].inputs.references);
     h.context.drawnPolygonLayers = [];
@@ -1178,6 +1184,81 @@ test("an expired selected reference output stays identified and explained by the
     assert.equal(h.requests.length, 0);
 });
 
+
+test("Run immediately identifies the prepared area and year through rejection, correction and acceptance", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    let now = 8000;
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({apis: ["setInterval"]});
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h, 1);
+    edit(h.view.setup.inputs.stack.year, "2019"); await settle();
+    let accept, reject;
+    h.api.submitModelRun = request => {
+        h.requests.push(request);
+        return new Promise((resolve, fail) => { accept = resolve; reject = fail; });
+    };
+    const run = h.view.setup.run, status = h.view.elements["recovery-message"];
+    const areaLabel = h.view.setup.inputs.area.preparationSelection.source.children[2].textContent;
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true}));
+    assert.equal(run.textContent, "Checking prepared inputs…");
+    assert.equal(status.textContent, `Checking prepared inputs for ${areaLabel} (assessment year 2019)…`);
+    assert.equal(run.disabled, true);
+    const elapsed = h.view.elements["submission-elapsed"];
+    assert.equal(elapsed.hidden, false);
+    assert.equal(elapsed.textContent, "Waited 0 sec");
+    now += 6500; t.mock.timers.tick(1000);
+    assert.equal(elapsed.textContent, "Waited 6 sec");
+    h.controller.setActive(false);
+    now += 60000; t.mock.timers.tick(1000);
+    assert.equal(elapsed.hidden, true); assert.equal(elapsed.textContent, "Waited 6 sec");
+    h.controller.setActive(true);
+    assert.equal(elapsed.textContent, "Waited 1 min 6 sec");
+    assert.equal(h.controller.state.runs.length, 0);
+    reject(new ProcessingRequestError("Prepared inputs are unavailable for this area and year.", 409)); await settle();
+    assert.equal(h.view.elements.error.textContent, "Prepared inputs are unavailable for this area and year.");
+    assert.equal(elapsed.hidden, true); assert.equal(status.textContent, "");
+    assert.equal(run.disabled, false); assert.equal(h.view.elements.recover.hidden, true);
+    await choosePreparationSelection(h, 0);
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true}));
+    assert.match(status.textContent, /BASIN equals "North"/);
+    assert.equal(elapsed.textContent, "Waited 0 sec");
+    accept(job({model: habitat})); await settle();
+    assert.equal(h.controller.state.page, "run");
+    assert.equal(h.view.run.status.textContent, "Queued");
+    assert.equal(status.textContent, ""); assert.equal(elapsed.hidden, true);
+    assert.equal(h.controller.state.runs.length, 1);
+    assert.notEqual(h.requests[0].requestId, h.requests[1].requestId);
+});
+
+test("prepared-input recovery confirms the saved request when the first acceptance reply was lost", async t => {
+    const h = await fixture(); t.after(() => h.controller.destroy());
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    await choosePreparationSelection(h);
+    const accepted = new Map(); let finishRetry;
+    h.api.submitModelRun = async request => {
+        h.requests.push(structuredClone(request));
+        if (accepted.has(request.requestId)) {
+            await new Promise(resolve => { finishRetry = resolve; });
+            return accepted.get(request.requestId);
+        }
+        accepted.set(request.requestId, job({model: habitat}));
+        throw new TypeError("Connection lost");
+    };
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true})); await settle();
+    const retry = h.view.elements.recover;
+    assert.equal(retry.hidden, false);
+    retry.dispatchEvent(new Event("click")); retry.dispatchEvent(new Event("click"));
+    assert.equal(h.view.elements["recovery-message"].textContent, "Confirming whether “Ecosystem Condition” started…");
+    assert.equal(h.requests.length, 2);
+    finishRetry(); await settle();
+    assert.deepEqual(h.requests[1], h.requests[0]);
+    assert.equal(accepted.size, 1);
+    assert.equal(h.controller.state.runs.length, 1);
+    assert.equal(h.controller.state.selectedRun, accepted.get(h.requests[0].requestId).jobId);
+    assert.equal(h.view.run.status.textContent, "Queued");
+    assert.equal(h.view.elements["submission-elapsed"].hidden, true);
+});
 
 test("Earth Engine preparation selections are independent of Map layers, manual area choices and reference filters", async t => {
     const h = await fixture(); t.after(() => h.controller.destroy());

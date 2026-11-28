@@ -106,7 +106,8 @@ article.models-result > .models-actions { margin: 0; }
 .models-delete-confirm:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--status-danger); text-decoration: underline; }
 .models-deletion-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 0; margin: 4px 0; border-bottom: 1px solid var(--border-1); font-size: var(--font-size-support); overflow-wrap: anywhere; }
 .models-deletion-notice p { flex: 1 1 180px; min-width: 0; margin: 0; }
-#models-recovery { padding: 10px; border: 1px solid var(--status-warning); }
+#models-feedback:has(#models-recovery:not([hidden])) { padding: 10px; border: 1px solid var(--status-warning); overflow-wrap: anywhere; }
+#models-recovery-message { margin: 0; }
 #models-yaml { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; border: 1px solid var(--border-1); padding: 10px; max-height: 24rem; overflow: auto; }
 #models-panel [hidden] { display: none; }
 #models-page :is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
