@@ -1,11 +1,14 @@
 """Run Habitat condition with authorized inputs in a Processing attempt."""
 
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 from math import ceil
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from xml.etree import ElementTree
 from typing import Any, Literal, cast
 from zipfile import ZipFile, ZIP_STORED
 
@@ -244,6 +247,92 @@ def describe_habitat_file(path: Path, name: str, media_type: str) -> ProducedFil
     )
 
 
+@contextmanager
+def _mask_habitat_bands(
+    bands: list[RasterBand],
+    dataset: rasterio.io.DatasetReader,
+    aoi: BaseGeometry,
+    directory: Path,
+    limits: RasterAggregateLimits,
+) -> Iterator[list[RasterBand]]:
+    """Expose the full-grid AOI membership that governs sampling and prediction.
+
+    Rasterizing a polygon clipped to each sampling tile can select different
+    boundary centers from rasterizing it on the complete output grid. Apply
+    the latter membership to the data bands that the scientific reader sees.
+
+    Args:
+        bands: Named predictor and response bands on the same model grid.
+        dataset: Open aligned raster supplying that grid.
+        aoi: Attempt-owned projected area, including any holes.
+        directory: Private attempt directory for the mask and virtual dataset.
+        limits: Processing settings for the existing disk-backed rasterizer.
+
+    Yields:
+        Bands in caller order. A single virtual dataset shares the AOI mask
+        without writing data rasters or modifying reusable sources.
+
+    Raises:
+        OSError: If temporary files cannot be written, read or removed.
+        RasterioError: If GDAL cannot rasterize the AOI.
+    """
+    # Allow a quarter-cell margin around the extreme pixel centers so a center
+    # on a numerical boundary always uses the canonical rasterization.
+    left, top = dataset.transform * (0.25, 0.25)
+    right, bottom = dataset.transform * (dataset.width - 0.25, dataset.height - 0.25)
+    if aoi.covers(box(left, bottom, right, top)):
+        yield bands
+        return
+
+    with (
+        TemporaryDirectory(prefix="habitat-area-", dir=directory) as temporary,
+        temporary_polygon_mask(
+            dataset,
+            Window(0, 0, dataset.width, dataset.height),
+            (mapping(aoi),),
+            Path(temporary),
+            limits,
+        ) as mask,
+    ):
+        assert mask is not None  # The nonempty AOI above always requests a mask.
+        root = ElementTree.Element(
+            "VRTDataset",
+            rasterXSize=str(dataset.width),
+            rasterYSize=str(dataset.height),
+        )
+        ElementTree.SubElement(root, "SRS").text = dataset.crs.to_wkt()
+        ElementTree.SubElement(root, "GeoTransform").text = ",".join(
+            str(value) for value in dataset.transform.to_gdal()
+        )
+        for index, band in enumerate(bands, start=1):
+            output = ElementTree.SubElement(
+                root, "VRTRasterBand", dataType="Float64", band=str(index)
+            )
+            ElementTree.SubElement(output, "NoDataValue").text = "nan"
+            source = ElementTree.SubElement(output, "ComplexSource")
+            ElementTree.SubElement(source, "SourceFilename", relativeToVRT="0").text = (
+                str(band.path)
+            )
+            ElementTree.SubElement(source, "SourceBand").text = str(band.index)
+            # Preserve source validity before the shared dataset mask takes precedence.
+            ElementTree.SubElement(source, "UseMaskBand").text = "true"
+        shared_mask = ElementTree.SubElement(root, "MaskBand")
+        byte_band = ElementTree.SubElement(
+            shared_mask, "VRTRasterBand", dataType="Byte"
+        )
+        source = ElementTree.SubElement(byte_band, "SimpleSource")
+        ElementTree.SubElement(source, "SourceFilename", relativeToVRT="0").text = (
+            mask.name
+        )
+        ElementTree.SubElement(source, "SourceBand").text = "1"
+        path = Path(temporary) / "bands.vrt"
+        ElementTree.ElementTree(root).write(path, encoding="utf-8")
+        yield [
+            RasterBand(band.name, path, index)
+            for index, band in enumerate(bands, start=1)
+        ]
+
+
 def calculate_habitat(
     sources: HabitatSources,
     prepared: HabitatCalculationInputs,
@@ -454,15 +543,20 @@ def calculate_habitat(
                 for name in IntegrityConfiguration.__dataclass_fields__
             }
         )
+        bands = [
+            RasterBand(name, band_paths[f"{role}_{index}"])
+            for role, names in (
+                ("predictor", predictor_names),
+                ("response", response_names),
+            )
+            for index, name in enumerate(names)
+        ]
+        bands_in_area = resources.enter_context(
+            _mask_habitat_bands(bands, dataset, aoi, directory, limits)
+        )
         result = run_habitat_condition(
-            [
-                RasterBand(name, rasters[f"predictor_{index}"])
-                for index, name in enumerate(predictor_names)
-            ],
-            [
-                RasterBand(name, rasters[f"response_{index}"])
-                for index, name in enumerate(response_names)
-            ],
+            bands_in_area[: len(predictor_names)],
+            bands_in_area[len(predictor_names) :],
             RasterBand("reference_sites", reference_path),
             aoi,
             directory / "habitat-output",
