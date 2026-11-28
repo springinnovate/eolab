@@ -162,7 +162,10 @@ def publish_band_tile(local: Path, cached: Path) -> None:
 def write_band_mosaic(
     path: Path, sources: Sequence[Path], index: int, grid: RasterGrid | None = None
 ) -> None:
-    """Expose one band from nonoverlapping tiles, with NoData in coverage gaps.
+    """Expose one numeric band from nonoverlapping tiles, with NoData in gaps.
+
+    The job-local view has no color interpretation so GDAL can combine it with
+    views of the same variable from different GeoTIFF storage layouts.
 
     Args:
         path: Attempt-private VRT filename.
@@ -193,9 +196,9 @@ def write_band_mosaic(
             VRTNodata="nan",
             resampleAlg="nearest",
             **options,
-        ),
+        ) as mosaic,
     ):
-        pass
+        mosaic.GetRasterBand(1).SetColorInterpretation(gdal.GCI_Undefined)
 
 
 def _same_lattice(source: rasterio.io.DatasetReader, grid: RasterGrid) -> bool:

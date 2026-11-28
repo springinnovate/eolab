@@ -15,6 +15,7 @@ import ee
 from numpy.typing import NDArray
 import pytest
 import rasterio
+from rasterio.enums import ColorInterp
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
@@ -117,12 +118,16 @@ def _fixture_values() -> dict[str, NDArray[np.float32]]:
     return values
 
 
-def _tile_response(column: int, row: int) -> bytes:
+def _tile_response(
+    column: int, row: int, interleave: str = "pixel", *, red_band: int | None = None
+) -> bytes:
     """Encode one controlled GEE response in the configured multiband order.
 
     Args:
         column: Zero-based tile column in the fixture extent.
         row: Zero-based tile row in the fixture extent.
+        interleave: Pixel- or band-contiguous layout for the admitted GeoTIFF.
+        red_band: One-based band to mark red in the original display metadata.
 
     Returns:
         Complete float32 GeoTIFF bytes, preserving NaN NoData and valid zero.
@@ -133,6 +138,7 @@ def _tile_response(column: int, row: int) -> bytes:
         with memory.open(
             driver="GTiff",
             count=len(configuration.bands),
+            interleave=interleave,
             width=8,
             height=8,
             dtype="float32",
@@ -140,6 +146,10 @@ def _tile_response(column: int, row: int) -> bytes:
             nodata=np.nan,
             transform=from_origin(column * 8000, 16000 - row * 8000, 1000, 1000),
         ) as destination:
+            if red_band is not None:
+                colors = list(destination.colorinterp)
+                colors[red_band - 1] = ColorInterp.red
+                destination.colorinterp = colors
             destination.write(
                 np.stack(
                     [
@@ -209,15 +219,18 @@ def test_prepared_band_views_keep_source_validity_and_selected_order(
                 )
 
 
+@pytest.mark.parametrize("second_tile_layout", ["pixel", "band"])
 def test_prepared_reruns_read_new_coverage_and_only_write_missing_selected_channels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    second_tile_layout: str,
 ) -> None:
     """Add geographic coverage and switch both dataset roles off then on again.
 
     Args:
         tmp_path: Published acquisition tiles and separate per-job views.
         monkeypatch: Return controlled real raster bytes at the acquisition boundary.
+        second_tile_layout: Storage layout of the newly published neighboring tile.
     """
     from eolab_app.processing import habitat_earth_engine
 
@@ -253,13 +266,26 @@ def test_prepared_reruns_read_new_coverage_and_only_write_missing_selected_chann
             (full, None, 2),
             (subset, None, 0),
             (full, None, 0),
-            (full, 1, 4),
+            (full, 1, 4 if second_tile_layout == "pixel" else 0),
+            (subset, None, 0),
+            (full, None, 0),
         )
     ):
         if added_column is not None:
             with monkeypatch.context() as acquisition:
                 _use_offline_earth_engine(
-                    acquisition, [({"status": "200"}, _tile_response(added_column, 0))]
+                    acquisition,
+                    [
+                        (
+                            {"status": "200"},
+                            _tile_response(
+                                added_column,
+                                0,
+                                "pixel" if added_column == 0 else second_tile_layout,
+                                red_band=1 if second_tile_layout == "band" else None,
+                            ),
+                        )
+                    ],
                 )
                 get_habitat_tiles(
                     box(added_column * 8000, 8000, (added_column + 1) * 8000, 16000),
@@ -274,7 +300,7 @@ def test_prepared_reruns_read_new_coverage_and_only_write_missing_selected_chann
                 )
         inputs = get_cached_habitat_tiles(area, config, cache)
         assert inputs.required_tiles == 2 and len(inputs.tiles) == (
-            2 if run == 4 else 1
+            2 if run >= 4 else 1
         )
         before = len(writes)
         seen: list[int] = []
@@ -329,17 +355,19 @@ def _fixture_native_target(
 
 
 @pytest.mark.parametrize(
-    "coverage",
+    ("coverage", "mixed_interleave"),
     [
-        "complete",
-        "partial",
-        "new_tile",
-        "empty",
-        "wrong_year",
-        "no_references",
-        "selected",
-        "categorical_only",
-        "continuous_only",
+        ("complete", False),
+        ("partial", False),
+        ("new_tile", False),
+        ("empty", False),
+        ("wrong_year", False),
+        ("no_references", False),
+        ("selected", False),
+        ("categorical_only", False),
+        ("continuous_only", False),
+        ("partial", True),
+        ("selected", True),
     ],
 )
 def test_earth_engine_run_uses_prepared_geographic_coverage(
@@ -357,6 +385,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         "categorical_only",
         "continuous_only",
     ],
+    mixed_interleave: bool,
 ) -> None:
     """Use prepared tiles without downloads and retain model screening and NoData.
 
@@ -366,6 +395,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
         monkeypatch: Supply controlled preparation pixels and reject model downloads.
         coverage: Geographic cache availability, absence of reference sites, or
             selected dataset subsets including the minimum categorical-only fit.
+        mixed_interleave: Alternate GeoTIFF storage layouts across neighboring tiles.
     """
     aoi = box(0, 0, 24000, 16000)
     if coverage == "selected":
@@ -445,7 +475,19 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
             _use_offline_earth_engine(
                 acquisition,
                 [
-                    ({"status": "200"}, _tile_response(column, row))
+                    (
+                        {"status": "200"},
+                        _tile_response(
+                            column,
+                            row,
+                            (
+                                "band"
+                                if mixed_interleave and (column + row) % 2
+                                else "pixel"
+                            ),
+                            red_band=row + 1 if mixed_interleave else None,
+                        ),
+                    )
                     for column, row in prepared_tiles
                 ],
             )
@@ -767,6 +809,7 @@ def test_earth_engine_run_uses_prepared_geographic_coverage(
                 assert actual.transform == from_origin(0, 16000, 500, 500)
                 assert actual.crs == rasterio.crs.CRS.from_epsg(6933)
                 assert actual.shape == (32, 48)
+                assert actual.nodatavals == direct.nodatavals
                 assert actual.descriptions == direct.descriptions
                 np.testing.assert_array_equal(actual.read(), direct.read())
                 np.testing.assert_array_equal(actual.read_masks(), direct.read_masks())
