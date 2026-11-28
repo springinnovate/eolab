@@ -1,9 +1,9 @@
-"""Authenticated control of transient tickets in the shared PostgreSQL worker queue."""
+"""Serve the restricted Jobs supervisor's private ticket and lease endpoints."""
 
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 import hmac
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException
@@ -12,8 +12,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from eolab_jobs.job_notifications import JOB_QUEUE_CHANNEL
-from eolab_jobs.worker_claim import claim_next_job, lock_job_queue, renew_job_lease
+from eolab_jobs.executor_tickets import ExecutorReplaced, ExecutorTickets
+from eolab_jobs.worker_claim import lock_job_queue
 
 
 class Activation(BaseModel):
@@ -128,14 +128,14 @@ def create_executor_router(
     @contextmanager
     def transaction(
         instance: UUID | None = None,
-    ) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
+    ) -> Iterator[ExecutorTickets]:
         """Lock the common queue and fence calls from a replaced executor.
 
         Args:
             instance: Required active supervisor generation, except during activation.
 
         Yields:
-            A cursor committed before the reply is returned.
+            Ticket operations committed before the reply is returned.
 
         Raises:
             HTTPException: If this supervisor was replaced or storage is unavailable.
@@ -143,26 +143,18 @@ def create_executor_router(
         try:
             with pool.connection() as connection, connection.cursor() as cursor:
                 lock_job_queue(cursor)
-                if instance is not None:
-                    cursor.execute(
-                        "SELECT FROM processing.executor_sessions WHERE scope=%s AND instance=%s",
-                        (scope, instance),
-                    )
-                    if cursor.fetchone() is None:
-                        raise HTTPException(409, "Executor instance was replaced")
-                yield cursor
+                tickets = ExecutorTickets(
+                    cursor, scope, operation, worker_count, lease_seconds
+                )
+                if instance is not None and tickets.current_instance() != instance:
+                    raise ExecutorReplaced("Executor instance was replaced")
+                yield tickets
+        except ExecutorReplaced as error:
+            raise HTTPException(409, str(error)) from error
         except psycopg.Error as error:
             raise HTTPException(
                 503, "Job scheduler is temporarily unavailable"
             ) from error
-
-    def notify_capacity(cursor: psycopg.Cursor[Any]) -> None:
-        """Wake waiting workers after deleting a reaped attempt's transient ticket.
-
-        Args:
-            cursor: Cursor in the transaction releasing the slot.
-        """
-        cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
 
     @router.get("/session")
     def current_instance() -> UUID | None:
@@ -171,13 +163,8 @@ def create_executor_router(
         Returns:
             Its generation, or None if this is the first activation.
         """
-        with transaction() as cursor:
-            cursor.execute(
-                "SELECT instance FROM processing.executor_sessions WHERE scope=%s",
-                (scope,),
-            )
-            row = cursor.fetchone()
-            return row["instance"] if row else None
+        with transaction() as tickets:
+            return tickets.current_instance()
 
     @router.put("/session/{instance}", status_code=204)
     def activate(instance: UUID, activation: Activation) -> None:
@@ -190,29 +177,8 @@ def create_executor_router(
         Raises:
             HTTPException: If another replacement has already taken ownership.
         """
-        with transaction() as cursor:
-            cursor.execute(
-                "SELECT instance FROM processing.executor_sessions WHERE scope=%s",
-                (scope,),
-            )
-            row = cursor.fetchone()
-            previous = row["instance"] if row else None
-            if previous == instance:
-                return
-            if previous != activation.previous:
-                raise HTTPException(
-                    409, "Executor generation changed during replacement"
-                )
-            cursor.execute(
-                "DELETE FROM processing.jobs WHERE executor_scope=%s", (scope,)
-            )
-            if cursor.rowcount:
-                notify_capacity(cursor)
-            cursor.execute(
-                "INSERT INTO processing.executor_sessions(scope,instance) VALUES (%s,%s) "
-                "ON CONFLICT(scope) DO UPDATE SET instance=excluded.instance, claim_sequence=0, stopped_attempt=NULL, stopped_with_lease=false",
-                (scope, instance),
-            )
+        with transaction() as tickets:
+            tickets.replace_stopped_instance(instance, activation.previous)
 
     @router.put("/{instance}/tickets/{job_id}", status_code=204)
     def admit(instance: UUID, job_id: UUID, ticket: Ticket) -> None:
@@ -223,25 +189,8 @@ def create_executor_router(
             job_id: Opaque ID assigned by Jobs admission, reused on a retry.
             ticket: Original arrival and deadline for this request.
         """
-        identifier = str(job_id)
-        with transaction(instance) as cursor:
-            cursor.execute(
-                "INSERT INTO processing.jobs(id,operation,executor_scope,status,created_at,expires_at,reserved_bytes) "
-                "VALUES (%s,%s,%s,'queued',%s,%s,0) ON CONFLICT(id) DO NOTHING",
-                (identifier, operation, scope, ticket.submitted_at, ticket.expires_at),
-            )
-            if cursor.rowcount:
-                cursor.execute(
-                    "INSERT INTO processing.job_subscribers(id,job_id,owner,request_key,created_at) "
-                    "VALUES (%s,%s,%s,%s,%s)",
-                    (
-                        identifier,
-                        identifier,
-                        f"executor:{scope}",
-                        identifier,
-                        ticket.submitted_at,
-                    ),
-                )
+        with transaction(instance) as tickets:
+            tickets.admit(job_id, ticket.submitted_at, ticket.expires_at)
 
     @router.post("/{instance}/claim")
     def claim(instance: UUID, request: ClaimRequest) -> Grant | None:
@@ -254,54 +203,16 @@ def create_executor_router(
         Returns:
             The claimed ticket and renewal interval, or None when no ticket can start.
         """
-        attempt = request.attempt.hex
-        with transaction(instance) as cursor:
-            cursor.execute(
-                "UPDATE processing.executor_sessions SET claim_sequence=%s WHERE scope=%s AND claim_sequence<%s",
-                (request.sequence, scope, request.sequence),
+        with transaction(instance) as tickets:
+            claimed = tickets.claim(
+                request.sequence, request.attempt, request.priorities
             )
-            fresh = bool(cursor.rowcount)
-            cursor.execute(
-                "SELECT id,attempt_id FROM processing.jobs WHERE executor_scope=%s "
-                "AND status IN ('running','cancelling')",
-                (scope,),
-            )
-            active = cursor.fetchone()
-            may_start = True
-            if active:
-                if active["attempt_id"] != attempt:
-                    return None
-                # A replay can arrive late. Only confirmation of native exit may free this slot.
-                may_start = renew_job_lease(
-                    cursor,
-                    job_id=active["id"],
-                    attempt_id=attempt,
-                    lease_seconds=lease_seconds,
-                    progress={},
-                )
-                identifier = active["id"]
-            elif fresh and request.priorities:
-                job = claim_next_job(
-                    cursor,
-                    worker_count=worker_count,
-                    lease_seconds=lease_seconds,
-                    supported_operations=[operation],
-                    attempt_id=attempt,
-                    executor_scope=scope,
-                    priorities={
-                        str(job_id): value
-                        for job_id, value in request.priorities.items()
-                    },
-                )
-                if job is None:
-                    return None
-                identifier = job["id"]
-            else:
+            if claimed is None:
                 return None
             return Grant(
-                job_id=UUID(identifier),
+                job_id=claimed.job_id,
                 heartbeat_seconds=lease_seconds / 3,
-                may_start=may_start,
+                may_start=claimed.may_start,
             )
 
     @router.post("/{instance}/withdraw", status_code=204)
@@ -314,12 +225,8 @@ def create_executor_router(
             instance: Active executor generation.
             identifiers: Tickets whose local Jobs requests stopped waiting.
         """
-        with transaction(instance) as cursor:
-            cursor.execute(
-                "DELETE FROM processing.jobs WHERE executor_scope=%s AND status='queued' "
-                "AND id=ANY(%s)",
-                (scope, [str(identifier) for identifier in identifiers]),
-            )
+        with transaction(instance) as tickets:
+            tickets.withdraw(identifiers)
 
     @router.put("/{instance}/tickets/{job_id}/attempts/{attempt}")
     def heartbeat(instance: UUID, job_id: UUID, attempt: UUID) -> bool:
@@ -333,18 +240,8 @@ def create_executor_router(
         Returns:
             Whether the child still has a live lease.
         """
-        with transaction(instance) as cursor:
-            cursor.execute(
-                "SELECT FROM processing.jobs WHERE id=%s AND executor_scope=%s",
-                (str(job_id), scope),
-            )
-            return cursor.fetchone() is not None and renew_job_lease(
-                cursor,
-                job_id=str(job_id),
-                attempt_id=attempt.hex,
-                lease_seconds=lease_seconds,
-                progress={},
-            )
+        with transaction(instance) as tickets:
+            return tickets.renew(job_id, attempt)
 
     @router.delete("/{instance}/tickets/{job_id}/attempts/{attempt}")
     def release(instance: UUID, job_id: UUID, attempt: UUID) -> bool:
@@ -358,25 +255,7 @@ def create_executor_router(
         Returns:
             Whether completion was fenced by a live lease, including after a lost reply.
         """
-        with transaction(instance) as cursor:
-            cursor.execute(
-                "DELETE FROM processing.jobs WHERE id=%s AND executor_scope=%s AND attempt_id=%s "
-                "RETURNING lease_until > clock_timestamp() AS live",
-                (str(job_id), scope, attempt.hex),
-            )
-            stopped = cursor.fetchone()
-            if stopped is not None:
-                cursor.execute(
-                    "UPDATE processing.executor_sessions SET stopped_attempt=%s, stopped_with_lease=%s WHERE scope=%s",
-                    (attempt, stopped["live"], scope),
-                )
-                notify_capacity(cursor)
-                return stopped["live"]
-            cursor.execute(
-                "SELECT stopped_with_lease FROM processing.executor_sessions WHERE scope=%s AND stopped_attempt=%s",
-                (scope, attempt),
-            )
-            acknowledged = cursor.fetchone()
-            return bool(acknowledged and acknowledged["stopped_with_lease"])
+        with transaction(instance) as tickets:
+            return tickets.release_stopped_attempt(job_id, attempt)
 
     return router

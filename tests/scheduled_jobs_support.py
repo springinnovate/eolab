@@ -9,7 +9,7 @@ import httpx2
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_jobs.executor_api import create_executor_router
+from eolab_app.routes.job_executor import create_executor_router
 from job_service.app import create_app
 from job_service.configuration import Settings, load_settings
 

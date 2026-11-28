@@ -133,7 +133,7 @@ from eolab_app.source_files import SourceFileError
 from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
-from eolab_jobs.executor_api import create_executor_router
+from eolab_app.routes.job_executor import create_executor_router
 from eolab_app.routes.stac_proxy import (
     NumberMatchedEstimateLookup,
     create_stac_proxy_router,

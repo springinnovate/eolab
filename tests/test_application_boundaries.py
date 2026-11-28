@@ -164,6 +164,14 @@ def test_shared_jobs_package_dependencies() -> None:
     }
     module_dependencies = {
         "job_notifications.py": sys.stdlib_module_names | {"psycopg"},
+        "executor_tickets.py": {
+            "dataclasses",
+            "datetime",
+            "typing",
+            "uuid",
+            "psycopg",
+            "eolab_jobs",
+        },
         "worker_claim.py": client_dependencies | {"contextlib", "psycopg"},
     }
     for path in package.rglob("*.py"):
@@ -180,12 +188,16 @@ def test_shared_jobs_package_dependencies() -> None:
     [
         ("eolab_jobs.client", ("psycopg", "psycopg_pool")),
         ("eolab_jobs.job_notifications", ("httpx2", "pydantic")),
+        (
+            "eolab_jobs.executor_tickets",
+            ("fastapi", "psycopg_pool", "httpx2", "pydantic"),
+        ),
     ],
 )
 def test_job_client_and_listener_import_independently(
     module: str, unavailable: tuple[str, ...]
 ) -> None:
-    """Load the HTTP client and the PostgreSQL listener with their own dependencies.
+    """Load each shared Jobs module with only the dependencies it uses.
 
     Args:
         module: Shared job module to import in a fresh interpreter.
