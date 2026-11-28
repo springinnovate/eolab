@@ -52,16 +52,18 @@ export function describeModelProgress(job) {
     return job.progress.total > 0 ? `${description} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${description}…`;
 }
 
-/** Format a time interval outward in a unit that matches its uncertainty.
- * @param {number} lowerSeconds Earliest time in the estimated range.
+/** Round a completion interval outward, showing a single maximum when it could finish now.
+ * @param {number} lowerSeconds Earliest time in the estimated range, or zero for an upper bound.
  * @param {number} upperSeconds Latest time in the estimated range.
- * @returns {string} Approximate range in seconds, minutes, or hours.
+ * @returns {string} Approximate range or maximum in seconds, minutes, or hours.
  */
 function durationRange(lowerSeconds, upperSeconds) {
-    const unit = lowerSeconds >= 3600 ? 3600 : lowerSeconds >= 60 ? 60 : 1;
+    const unitSeconds = lowerSeconds || upperSeconds;
+    const unit = unitSeconds >= 3600 ? 3600 : unitSeconds >= 60 ? 60 : 1;
     const lo = Math.floor(lowerSeconds / unit), hi = Math.ceil(upperSeconds / unit);
     const name = unit === 3600 ? "hour" : unit === 60 ? "minute" : "second";
-    return `${lo === hi ? lo : `${lo}–${hi}`} ${name}${hi === 1 ? "" : "s"}`;
+    const amount = lowerSeconds > 0 && lo !== hi ? `${lo}–${hi}` : hi;
+    return `${amount} ${name}${hi === 1 ? "" : "s"}`;
 }
 
 /** Describe queue or calculation time and the forecast through verified results.
@@ -81,9 +83,8 @@ export function describeCompletionEstimate(job, now) {
         ? "Estimating run time after it starts…" : "Estimating time until results are ready…");
     const range = durationRange(estimate.lowerSeconds, estimate.upperSeconds);
     if (estimate.lowerSeconds === 0) {
-        const maximum = durationRange(estimate.upperSeconds, estimate.upperSeconds);
-        return observed + (queued ? `Once started, results are expected within ${maximum}.`
-            : `Results are expected within ${maximum}.`);
+        return observed + (queued ? `Once started, results are expected within ${range}.`
+            : `Results are expected within ${range}.`);
     }
     return observed + (queued ? `Once started, about ${range} until results are ready.`
         : `About ${range} until results are ready.`);
