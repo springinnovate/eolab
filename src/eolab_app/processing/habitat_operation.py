@@ -26,6 +26,7 @@ from eolab_app.processing.habitat_preparation_selections import (
     HabitatSubmissionDependencies,
     validate_habitat_preparation_selection,
 )
+from eolab_app.processing.habitat_raster_cache import manual_band_cache_directory
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
@@ -289,8 +290,8 @@ async def prepare_habitat_execution(
         SelectionUnavailableError: If a selected vector cannot be read.
     """
     sources = await resolve_habitat_sources(context, spec.inputs)
+    cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
     if isinstance(spec.inputs.stack, HabitatEarthEngineStack):
-        cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
         if cache_directory is None:
             raise ProcessingError(
                 "habitat_cache_unavailable",
@@ -299,6 +300,19 @@ async def prepare_habitat_execution(
                 503,
             )
         sources = HabitatSources(sources.rasters, sources.vectors, cache_directory)
+    elif cache_directory is not None:
+        root = cache_directory.parent / "habitat-aligned"
+        scopes = {}
+        for name, reference in spec.inputs.get_raster_sources().items():
+            if name.startswith(("predictor_", "response_")):
+                scope = manual_band_cache_directory(
+                    root, reference, context.rasters[name]
+                )
+                if scope is not None:
+                    scopes[name] = scope
+        sources = HabitatSources(
+            sources.rasters, sources.vectors, band_cache_directories=scopes
+        )
     return sources, spec
 
 

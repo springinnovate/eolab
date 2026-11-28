@@ -43,6 +43,10 @@ from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from shapely.prepared import prep
 
+from eolab_app.processing.habitat_raster_cache import (
+    publish_band_tile,
+    write_band_mosaic,
+)
 from eolab_app.processing.habitat_tile_downloads import (
     HabitatTileDownload,
     download_habitat_tiles,
@@ -287,43 +291,68 @@ class HabitatEarthEngineRuntime:
     cache_directory: Path
 
 
-def _copy_habitat_tile_bands(
-    source_path: Path, band_indexes: tuple[int, ...], output_path: Path
-) -> None:
-    """Read selected bands together from one compressed tile for later per-band reads.
+def _get_tile_band_sources(
+    tile: Path,
+    band_indexes: tuple[int, ...],
+    scratch: Path,
+) -> dict[int, tuple[Path, int]]:
+    """Pin requested original or band-readable pixels from one immutable cache tile.
 
     Args:
-        source_path: Complete, admitted float32 cache tile.
-        band_indexes: One-based source bands in the requested scientific order.
-            Each band retains its scale and offset.
-        output_path: Private uncompressed GeoTIFF containing just those bands.
-            Each band is contiguous so reading one band skips its siblings.
+        tile: Published geographic tile under its scientific configuration and year.
+        band_indexes: Selected original one-based band indexes in requested order.
+        scratch: Private directory for this tile's working files and retained links.
+
+    Returns:
+        Original index mapped to its source filename and one-based readable band.
+        Pixel-interleaved tiles publish only missing selected bands. Their v1
+        values combine the declared NoData and source mask, preserving valid zero.
 
     Raises:
-        RasterioError: If a tile cannot be read or its temporary copy cannot be written.
+        RasterioError: If the admitted source or a private output cannot be read or written.
+        OSError: If retaining or publishing a complete tile fails.
     """
-    with rasterio.open(source_path) as source:
-        pixels = source.read(band_indexes, masked=True).filled(np.nan)
-        # A dataset-wide mask can override the declared NoData in GDAL's mask band.
+    shared = tile.parent / "habitat-bands-v1"
+    inputs = {}
+    missing = []
+    for index in band_indexes:
+        cached = shared / f"{index}.tif"
+        if cached.is_file():
+            inputs[index] = (cached, 1)
+        else:
+            missing.append(index)
+    if not missing:
+        return inputs
+    with rasterio.open(tile) as source:
+        if source.profile.get("interleave") != "pixel" or source.count == 1:
+            inputs.update({index: (tile, index) for index in missing})
+            return inputs
+        scratch.mkdir()
+        shared.mkdir(exist_ok=True)
+        pixels = source.read(missing, masked=True).filled(np.nan)
         if source.nodata is not None:
             pixels[pixels == source.nodata] = np.nan
-        with rasterio.open(
-            output_path,
-            "w",
-            driver="GTiff",
-            width=source.width,
-            height=source.height,
-            count=len(band_indexes),
-            dtype="float32",
-            crs=source.crs,
-            transform=source.transform,
-            nodata=np.nan,
-            interleave="band",
-        ) as target:
-            scales, offsets = source.scales, source.offsets
-            target.scales = tuple(scales[index - 1] for index in band_indexes)
-            target.offsets = tuple(offsets[index - 1] for index in band_indexes)
-            target.write(pixels)
+        scales, offsets = source.scales, source.offsets
+        for index, values in zip(missing, pixels, strict=True):
+            local = scratch / f"{index}.tif"
+            with rasterio.open(
+                local,
+                "w",
+                driver="GTiff",
+                width=source.width,
+                height=source.height,
+                count=1,
+                dtype="float32",
+                crs=source.crs,
+                transform=source.transform,
+                nodata=np.nan,
+            ) as target:
+                target.scales = (scales[index - 1],)
+                target.offsets = (offsets[index - 1],)
+                target.write(values, 1)
+            publish_band_tile(local, shared / local.name)
+            inputs[index] = (local, 1)
+    return inputs
 
 
 @contextmanager
@@ -332,56 +361,64 @@ def prepare_habitat_band_views(
     directory: Path,
     band_names: tuple[str, ...],
     *,
+    grid: RasterGrid | None = None,
     on_tile: Callable[[int], None] | None = None,
 ) -> Iterator[dict[str, Path]]:
-    """Expose selected cache bands as job-local single-band raster mosaics.
+    """Expose unmasked, selected cache bands on the exact grid of each calculation.
 
-    Read the requested channels together from each compressed geographic tile.
-    Ordinary raster preparation then warps and masks each variable from the
-    band-interleaved temporary files.
+    Band-interleaved inputs are read directly. Pixel-interleaved tiles supply
+    missing selected channels together for an immutable band-readable layout.
+    Its lifetime is the original tile's. Each attempt discovers geographic
+    coverage anew and assembles its own lightweight views.
 
     Args:
-        tiles: Complete, aligned files admitted by Habitat acquisition.
-        directory: Private attempt directory owned by the native supervisor.
+        tiles: Complete, immutable files admitted by Habitat acquisition.
+        directory: Private attempt directory on the same volume as the cache.
         band_names: Selected names from the admitted tile band definitions.
-        on_tile: Optional notification with the number of completed tile copies.
+        grid: Target extent and cell size for nearest-neighbor reads. Omit to
+            expose the native mosaic extent.
+        on_tile: Optional count of geographic input tiles opened for this job,
+            including tiles that supplied an existing band file.
 
     Yields:
-        VRT paths keyed by scientific band name, valid inside this context.
-        Gaps and masked cells are NoData. Zero remains a valid value.
+        VRT paths keyed by selected name. Geographic gaps and invalid pixels
+        are NoData. The views remain valid inside this context.
 
     Raises:
-        RasterioError: If a cached tile cannot be read or copied.
-        RuntimeError: If GDAL cannot construct a band mosaic.
-        OSError: If temporary file creation or cleanup fails.
+        RasterioError: If a selected source cannot be read.
+        RuntimeError: If GDAL cannot construct a view.
+        OSError: If temporary or shared input storage fails.
     """
-    from osgeo import gdal
-
     source_indexes = {name: index for index, name in enumerate(tiles.bands, start=1)}
-    band_indexes = tuple(source_indexes[name] for name in band_names)
+    indexes = tuple(source_indexes[name] for name in band_names)
     with TemporaryDirectory(prefix="habitat-bands-", dir=directory) as temporary:
         root = Path(temporary)
-        selected_tiles: list[str] = []
-        for tile_number, source in enumerate(tiles.tiles):
-            selected_tile = root / f"tile-{tile_number}.tif"
-            _copy_habitat_tile_bands(source, band_indexes, selected_tile)
-            selected_tiles.append(str(selected_tile))
+        sources = []
+        for number, tile in enumerate(tiles.tiles):
+            sources.append(
+                _get_tile_band_sources(tile, indexes, root / f"tile-{number}")
+            )
             if on_tile is not None:
-                on_tile(len(selected_tiles))
-
+                on_tile(len(sources))
         paths = {}
-        with (
-            gdal.ExceptionMgr(),
-            gdal.BuildVRT(
-                str(root / "mosaic.vrt"), selected_tiles, VRTNodata="nan"
-            ) as mosaic,
-        ):
-            for index, name in enumerate(band_names, start=1):
-                path = root / f"band-{index}.vrt"
-                gdal.Translate(
-                    str(path), mosaic, format="VRT", bandList=[index]
-                ).Close()
-                paths[name] = path
+        for name, index in zip(band_names, indexes, strict=True):
+            groups: dict[int, list[Path]] = {}
+            for selected in sources:
+                path, readable_index = selected[index]
+                groups.setdefault(readable_index, []).append(path)
+            view = root / f"band-{index}.vrt"
+            if len(groups) == 1:
+                readable_index, paths_for_band = next(iter(groups.items()))
+                write_band_mosaic(view, paths_for_band, readable_index, grid)
+            else:
+                # Original band-interleaved and derived single-band tiles can coexist.
+                parts = []
+                for readable_index, paths_for_band in groups.items():
+                    part = root / f"group-{index}-{readable_index}.vrt"
+                    write_band_mosaic(part, paths_for_band, readable_index)
+                    parts.append(part)
+                write_band_mosaic(view, parts, 1, grid)
+            paths[name] = view
         yield paths
 
 
