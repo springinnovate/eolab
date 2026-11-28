@@ -10,6 +10,8 @@ import hashlib
 import json
 import re
 import secrets
+from pathlib import Path as FilePath
+from tempfile import TemporaryDirectory
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -57,6 +59,7 @@ from eolab_app.processing.model_run_contracts import (
     ModelDeletionAction,
 )
 from eolab_app.routes.processing_events import JobEventResponse
+from eolab_app.routes.model_input_stream import ModelInputStream
 from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
@@ -66,7 +69,7 @@ from eolab_app.routes.http_disconnect import (
     run_until_http_disconnect,
 )
 from eolab_app.rendering.artifact_preview import ArtifactPreviewError
-from eolab_app.source_files import SourceFileError
+from eolab_app.source_files import SourceFileError, finish_source_task
 
 SupportedJobResponse = Annotated[
     ClipJobResponse | AggregateJobResponse | ModelJobResponse,
@@ -110,7 +113,10 @@ class RequestSizeLimitedRoute(APIRoute):
             Raises:
                 HTTPException: If the body exceeds this endpoint's byte limit.
             """
-            if request.method not in {"POST", "PATCH"}:
+            if (
+                request.method not in {"POST", "PATCH"}
+                or request.url.path == "/api/processing/model-runs/with-inputs"
+            ):
                 return await handler(request)
             limit = {
                 "/api/processing/polygon-areas": MAX_POLYGON_AREA_BYTES,
@@ -492,6 +498,60 @@ def create_processing_router(
                 ),
             )
         )
+        response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
+        return job
+
+    @router.post(
+        "/model-runs/with-inputs",
+        status_code=202,
+        response_model=ModelJobResponse,
+        openapi_extra={
+            **MUTATION_SCHEMA,
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/x-ndjson": {
+                        "schema": {"type": "string"},
+                        "description": "One model invocation, an array of attached input IDs, then one GeoJSON document per ID, each on its own line.",
+                    }
+                },
+            },
+        },
+    )
+    async def submit_model_with_inputs(
+        request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Queue a model and retain its attached drawings in the job's admission transaction.
+
+        Args:
+            request: Newline-delimited JSON with private session and upload credentials.
+            response: Receives renewed cookies and the accepted job location.
+
+        Returns:
+            The accepted run or its original result on an idempotent retry.
+
+        Raises:
+            HTTPException: Source identity, ownership, request size or admission failed.
+        """
+        owner = get_processing_session_owner_hash(
+            request, response, session_ttl_seconds
+        )
+        upload_owner = get_browser_owner_hash(
+            request, response, mutation_header="X-EOLab-Processing"
+        )
+        with TemporaryDirectory() as directory:
+            stream = ModelInputStream(request.stream(), FilePath(directory))
+            body = await stream.read_invocation()
+            submitting = asyncio.create_task(
+                service.submit_model_run(
+                    owner, body, upload_owner, receive_inputs=stream.receive_inputs
+                )
+            )
+            try:
+                job = await _await_service_result(asyncio.shield(submitting))
+            finally:
+                await finish_source_task(submitting)
+                await stream.lines.aclose()
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
 

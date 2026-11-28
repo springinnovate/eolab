@@ -2,8 +2,10 @@
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import fiona
 from fastapi.testclient import TestClient
@@ -244,6 +246,101 @@ def test_accepted_drawings_release_staging_capacity(model_boundary: Any) -> None
                 },
             ),
         )
+
+
+def test_model_admits_a_group_without_consuming_shared_staging(
+    model_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Attach 32 drawings to one run while an unrelated sampling area occupies a staging slot."""
+    client, worker, _ = model_boundary
+    geometry = rectangle(0.1, 9.1, 0.3, 9.3)
+    sampled = client.post(
+        "/api/processing/polygon-areas", json={"polygons": [geometry]}, headers=HEADERS
+    )
+    assert sampled.status_code == 200
+    documents = {}
+    members = []
+    for index in range(32):
+        key = uuid4().hex
+        document = json.dumps(
+            {
+                "type": "FeatureCollection",
+                "name": f"Layer {index}",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "id": str(index),
+                        "properties": {"name": "Survey"},
+                        "geometry": geometry,
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        documents[key] = document
+        selection = {
+            "kind": "capturedVector",
+            "layerName": "features",
+            "filter": {},
+            "reference": {"id": key, "sha256": hashlib.sha256(document).hexdigest()},
+        }
+        members.append({"label": f"Layer {index}", "selection": selection})
+    run = model_request(
+        client,
+        "raster-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {
+                "kind": "polygonGroup",
+                "name": "Survey areas",
+                "members": members,
+            },
+        },
+    )
+    payload = b"\n".join(
+        [
+            json.dumps(run).encode(),
+            json.dumps(list(documents)).encode(),
+            *documents.values(),
+        ]
+    )
+    path = "/api/processing/model-runs/with-inputs"
+    headers = {**HEADERS, "Content-Type": "application/x-ndjson"}
+    rejected = client.post(
+        path,
+        content=payload.replace(b'"name":"Survey"', b'"name":"Changed"', 1),
+        headers=headers,
+    )
+    assert rejected.status_code == 422, rejected.text
+    with store._transaction() as cursor:
+        cursor.execute("SELECT count(*) AS count FROM processing.inputs")
+        assert cursor.fetchone()["count"] == 1
+    response = client.post(path, content=payload, headers=headers)
+    assert response.status_code == 202, response.text
+    assert client.portal.call(worker.run_once)
+    job_id = response.json()["jobId"]
+    ready = client.get(f"/api/processing/jobs/{job_id}").json()
+    assert ready["status"] == "ready", ready
+    with (
+        rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as file,
+        file.open() as raster,
+    ):
+        numpy.testing.assert_array_equal(
+            raster.read_masks(1) > 0,
+            geometry_mask(
+                [geometry],
+                raster.shape,
+                raster.transform,
+                all_touched=True,
+                invert=True,
+            ),
+        )
+    assert submit(client, run)["jobId"] == job_id
+    with store._transaction() as cursor:
+        cursor.execute(
+            "SELECT count(*) AS count FROM processing.inputs WHERE expires_at IS NOT NULL"
+        )
+        assert cursor.fetchone()["count"] == 1
 
 
 def test_clip_pixels_match_for_all_four_vector_sources(

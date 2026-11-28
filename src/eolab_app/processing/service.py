@@ -19,6 +19,7 @@ from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
     MAX_STAGED_INPUT_BYTES,
     ArtifactDownload,
+    JobInputDocument,
     JobInputFile,
     JobInputReference,
     JobSubmission,
@@ -772,7 +773,18 @@ class ProcessingService:
         )
 
     async def submit_model_run(
-        self, owner: str, request: ModelRunRequest, upload_owner: str | None = None
+        self,
+        owner: str,
+        request: ModelRunRequest,
+        upload_owner: str | None = None,
+        *,
+        receive_inputs: (
+            Callable[
+                [dict[str, ProcessingInputReference]],
+                Awaitable[tuple[JobInputDocument, ...]],
+            ]
+            | None
+        ) = None,
     ) -> dict[str, Any]:
         """Start a model run, or recover a previously accepted submission.
 
@@ -787,6 +799,8 @@ class ProcessingService:
             owner: Hash of the requesting browser's Processing session cookie.
             request: The chosen model, input datasets, area, parameters and run label.
             upload_owner: Separate browser identity authorizing uploaded originals.
+            receive_inputs: Receive any attached documents for the model's declared
+                private inputs after validating the recipe and its raster sources.
 
         Returns:
             The newly queued run, or the original run for an unchanged retry.
@@ -876,12 +890,23 @@ class ProcessingService:
         prepared = replace(
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
         )
+        selections = operation.vector_selections(calculation)
+        if receive_inputs is not None:
+            references = {
+                source.reference.id: source.reference
+                for selection in selections.values()
+                for source in (selection, *referenced_layers(selection.filter))
+                if isinstance(source, CapturedVectorSelection)
+            }
+            prepared = replace(
+                prepared, input_documents=await receive_inputs(references)
+            )
         row = await self._submit_job(
             owner,
             request.requestId,
             prepared,
             request_hash,
-            operation.vector_selections(calculation),
+            selections,
             upload_owner,
             tuple(
                 reference
@@ -1455,7 +1480,7 @@ class ProcessingService:
             ProcessingError: If temporary input storage is full or unavailable.
             ValueError: If the input is invalid GeoJSON for a drawing.
         """
-        document = DrawingFeatureCollection.model_validate_json(body).model_dump_json()
+        document = DrawingFeatureCollection.normalize_document(body)
         checksum = hashlib.sha256(document.encode("utf-8")).hexdigest()
         identifier = self.jobs.save_input(
             owner,

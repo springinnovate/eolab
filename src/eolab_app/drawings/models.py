@@ -91,6 +91,21 @@ class DrawingFeatureCollection(DrawingDocumentPart):
     name: DrawingName
     features: list[DrawingFeature]
 
+    @classmethod
+    def normalize_document(cls, body: bytes) -> str:
+        """Validate a drawing and encode all its original features as compact JSON.
+
+        Args:
+            body: UTF-8 GeoJSON submitted by the editor.
+
+        Returns:
+            Normalized JSON including the original names, notes and polygon types.
+
+        Raises:
+            ValueError: If the source violates the drawing contract.
+        """
+        return cls.model_validate_json(body).model_dump_json()
+
     @model_validator(mode="after")
     def validate_feature_ids(self) -> Self:
         """Require a unique ID for each polygon across the complete layer.

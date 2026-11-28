@@ -587,7 +587,34 @@ class PostgresJobStore:
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
         private_inputs: list[tuple[str, str]] = []
-        with self._transaction(acquire_lock=True) as cursor:
+        documents = {
+            document.reference: document.path
+            for item in submissions
+            if isinstance(item.prepared, PreparedJobPlan)
+            for document in item.prepared.input_documents
+        }
+        inserted = set()
+        with self._transaction(acquire_lock=not documents) as cursor:
+            # Transfer each document before taking the shared queue lock. Other
+            # transactions see neither the files nor the new job until commit.
+            for reference in sorted(documents, key=lambda value: value.id):
+                path = documents[reference]
+                cursor.execute(
+                    "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) "
+                    "VALUES (%s,%s,%s,%s::jsonb,%s,NULL,%s) ON CONFLICT (id) DO NOTHING RETURNING id",
+                    (
+                        reference.id,
+                        owner,
+                        reference.sha256,
+                        path.read_text(encoding="utf-8"),
+                        path.stat().st_size,
+                        reference.media_type,
+                    ),
+                )
+                if cursor.fetchone() is not None:
+                    inserted.add(reference)
+            if documents:
+                lock_job_queue(cursor)
             with (cursor.connection.cursor() as work_cursor,):
                 with cursor.connection.pipeline():
                     cursor.execute(
@@ -627,7 +654,8 @@ class PostgresJobStore:
                 # Existing retries above retain their original grant even after expiry.
                 try:
                     for reference in expected.input_references:
-                        self._authorize_input_reference(cursor, owner, reference)
+                        if reference not in inserted:
+                            self._authorize_input_reference(cursor, owner, reference)
                     inputs = []
                     for captured in expected.input_files:
                         parent, current = self._inspect_input_file(
@@ -749,6 +777,14 @@ class PostgresJobStore:
                     cursor.execute(
                         "UPDATE processing.inputs SET expires_at=NULL WHERE id=ANY(%s) AND expires_at IS NOT NULL",
                         ([input_id for _, input_id in private_inputs],),
+                    )
+                unused = {ref.id for ref in inserted} - {
+                    input_id for _, input_id in private_inputs
+                }
+                if unused:
+                    cursor.execute(
+                        "DELETE FROM processing.inputs WHERE id=ANY(%s)",
+                        (list(unused),),
                     )
                 if new_jobs:
                     cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))

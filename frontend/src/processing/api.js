@@ -5,6 +5,7 @@ import { normalizeCalculationArea } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./calculation-session.js";
 import { csvParse } from "d3";
 import { rasterSourceReference } from "../raster-source.js";
+import { PendingModelInputs } from "./model-inputs.js";
 
 /** A prepared Earth Engine dataset offered in Ecosystem Condition setup.
  * @typedef {Object} HabitatDatasetSource
@@ -221,6 +222,7 @@ export class ProcessingApiClient {
         this.eventListeners = new Set();
         this.eventStream = null;
         this.pendingCalculations = [];
+        this.modelInputs = new PendingModelInputs();
     }
 
     /** Share one event stream for planning and job observers after cookie setup.
@@ -330,24 +332,23 @@ export class ProcessingApiClient {
         return this.request("/raster-calculations/validate", "POST", { alias: "a", calculations }, signal);
     }
 
-    /** Capture original features for a model and return their private input reference.
-     * @param {Object} collection Committed GeoJSON with feature IDs, properties and polygons.
-     * @return {Promise<Object>} Validated opaque ID and checksum of the captured source.
-     * @throws {Error} If capture fails or the reference is malformed.
+    /** Keep the selected source on this device until model admission settles.
+     * @param {Object} collection Committed drawing document to send with the model.
+     * @return {Promise<{id:string,sha256:string}>} Identity and checksum of the exact request bytes.
+     * @throws {Error} If device storage cannot retain the drawing.
      */
     async captureVectorInput(collection) {
-        await this.ensureSession();
-        return validatePolygonAreaReference(await this.request("/vector-inputs", "POST", collection));
+        return this.modelInputs.capture(collection);
     }
 
-    /** Release this session's staging reference after an abandoned or rejected run.
+    /** Release a pending drawing on this device after abandoning a run.
      * @param {string} id Private input ID returned by captureVectorInput.
      * @return {Promise<Object>} Idempotent deletion acknowledgement.
      * @throws {Error} If deletion fails.
      */
     async discardVectorInput(id) {
-        await this.ensureSession();
-        return this.request(`/vector-inputs/${validateProcessingId(id)}`, "DELETE");
+        await this.modelInputs.discard(validateProcessingId(id));
+        return {deleted: true};
     }
 
     /** Upload exact polygons once and receive a private, expiring calculation reference.
@@ -527,9 +528,19 @@ export class ProcessingApiClient {
      */
     async submitModelRun(submission) {
         await this.ensureSession();
-        const job = validateJob(await this.request("/model-runs", "POST", submission));
-        if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
-        return job;
+        const {body, ids} = await this.modelInputs.forSubmission(submission);
+        let settled = false;
+        try {
+            const job = validateJob(await this.request(ids.length ? "/model-runs/with-inputs" : "/model-runs", "POST", body));
+            if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
+            settled = true;
+            return job;
+        } catch (error) {
+            settled = error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500;
+            throw error;
+        } finally {
+            if (settled) await Promise.allSettled(ids.map(id => this.modelInputs.discard(id)));
+        }
     }
 
     /** Read a temporal stack's owned CSV without converting exact scalar text.
@@ -682,9 +693,9 @@ export class ProcessingApiClient {
             headers: {
                 Accept: "application/json",
                 ...(method === "GET" ? {} : { "X-EOLab-Processing": "1" }),
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+                ...(body === undefined ? {} : { "Content-Type": body instanceof Blob ? body.type : "application/json" }),
             },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            ...(body === undefined ? {} : { body: body instanceof Blob ? body : JSON.stringify(body) }),
         });
         const data = await response.json().catch(() => null);
         if (!response.ok) {

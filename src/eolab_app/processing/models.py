@@ -51,6 +51,19 @@ class JobInputReference:
 
 
 @dataclass(frozen=True)
+class JobInputDocument:
+    """A validated private input delivered with this submission.
+
+    Attributes:
+        reference: Opaque ID, checksum of the submitted document and required format.
+        path: Request-owned temporary file containing compact normalized JSON.
+    """
+
+    reference: JobInputReference
+    path: Path
+
+
+@dataclass(frozen=True)
 class PreparedJobPlan:
     """Validated operation data supplied to storage by its application owner.
 
@@ -67,6 +80,7 @@ class PreparedJobPlan:
         input_uploads: Original upload IDs mapped to private retained-file tokens.
             These files remain available until the accepted computation stops.
         input_references: Private JSON inputs to authorize and retain on admission.
+        input_documents: New private inputs to insert in the same transaction as the job.
         minimum_retention_seconds: Optional minimum lifetime for both published
             results and saved details after completion. Storage captures the larger
             of this duration and the deployment's result and metadata lifetimes.
@@ -82,6 +96,7 @@ class PreparedJobPlan:
     input_uploads: dict[str, str] = field(default_factory=dict)
     minimum_retention_seconds: int | None = None
     input_references: tuple[JobInputReference, ...] = ()
+    input_documents: tuple[JobInputDocument, ...] = ()
 
 
 @dataclass(frozen=True)
