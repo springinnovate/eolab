@@ -78,8 +78,8 @@ export class ModelsController {
             pending: null, submitting: false, submissionWait: null, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
         this.vectorSelectionRequests = new Map();
-        /** @type {Map<string,string[]>} Uploaded polygon IDs owned by each retry slot in this tab. */
-        this.pendingVectorInputs = new Map();
+        /** @type {string[]} Device attachments for the currently recoverable request. */
+        this.pendingInputIds = [];
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
@@ -137,6 +137,7 @@ export class ModelsController {
      */
     #restorePendingSubmission(finishedKey = null) {
         this.state.pending = null;
+        this.pendingInputIds = [];
         for (const id of this.allowedModelIds ?? [null]) {
             const key = this.#recoveryKey(id);
             if (key === finishedKey) continue;
@@ -144,7 +145,9 @@ export class ModelsController {
                 const value = JSON.parse(this.storage?.getItem(key) ?? "null");
                 if (value && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) &&
                     value.model && value.inputs && value.parameters && (id === null || value.model.id === id)) {
-                    this.state.pending = value;
+                    const {attachmentIds = [], ...submission} = value;
+                    this.state.pending = submission;
+                    this.pendingInputIds = attachmentIds;
                     return;
                 }
             } catch (error) {
@@ -720,6 +723,7 @@ export class ModelsController {
         if (!model || !this.#allowsModel(model.id)) return;
         const recoveryKey = this.#recoveryKey(model.id);
         const capturedInputIds = [];
+        let attachmentIds = retry ? this.pendingInputIds : [];
         this.state.error = "";
         try {
             if (!retry && Object.values(draft.inputs).some(input => input.filterEditing)) throw new Error("Apply or close the filter before running the tool.");
@@ -742,12 +746,16 @@ export class ModelsController {
             }
             const serialized = JSON.stringify(submission);
             if (new TextEncoder().encode(serialized).length > 16384) throw new Error("Tool inputs exceed the 16 KiB submission limit.");
-            this.storage.setItem(recoveryKey, serialized);
-            if (capturedInputIds.length) this.pendingVectorInputs.set(recoveryKey, capturedInputIds.splice(0));
+            if (!retry) {
+                this.storage.setItem(recoveryKey, capturedInputIds.length
+                    ? JSON.stringify({...submission, attachmentIds: capturedInputIds}) : serialized);
+                attachmentIds = capturedInputIds.splice(0);
+                this.pendingInputIds = attachmentIds;
+            }
             this.state.pending = submission; this.state.submitting = true; this.state.submissionWait = wait; this.render();
-            const job = await this.api.submitModelRun(submission);
+            const job = await this.api.submitModelRun(submission, attachmentIds);
             this.state.submissionWait = null;
-            this.pendingVectorInputs.delete(recoveryKey);
+            this.discardVectorInputs(attachmentIds);
             this.#finishRecovery(recoveryKey);
             this.rememberRun(job); this.jobs.accept(job);
             if (revision === this.revision) await this.showRun(job.jobId);
@@ -755,8 +763,7 @@ export class ModelsController {
             // A definite rejection allows editing. Transport/5xx failures retain
             // the exact request because the server may already have accepted it.
             if (error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500) {
-                this.discardVectorInputs(this.pendingVectorInputs.get(recoveryKey) ?? []);
-                this.pendingVectorInputs.delete(recoveryKey);
+                this.discardVectorInputs(attachmentIds);
                 this.#finishRecovery(recoveryKey);
             }
             if (revision === this.revision && !this.destroyed)
@@ -777,7 +784,7 @@ export class ModelsController {
     }
 
     /** Release vector inputs captured by this tab after an abandoned or rejected submission.
-     * The ordinary input expiry also removes references when a release cannot reach the server.
+     * The pending input store expires abandoned documents if local cleanup fails.
      * @param {string[]} ids Private input IDs created by this controller.
      * @return {void}
      */

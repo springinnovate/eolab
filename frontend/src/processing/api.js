@@ -551,24 +551,16 @@ export class ProcessingApiClient {
 
     /** Submit the captured setup with the same request ID on every retry.
      * @param {Object} submission Model identity, inputs, parameters, label and request ID.
+     * @param {string[]} [attachmentIds] Device-owned attachments recorded with the pending request.
      * @return {Promise<Object>} Accepted job status.
      * @throws {ProcessingRequestError|Error} If admission fails or the reply is invalid.
      */
-    async submitModelRun(submission) {
+    async submitModelRun(submission, attachmentIds = []) {
         await this.ensureSession();
-        const {body, ids} = await this.modelInputs.forSubmission(submission);
-        let settled = false;
-        try {
-            const job = validateJob(await this.request(ids.length ? "/model-runs/with-inputs" : "/model-runs", "POST", body));
-            if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
-            settled = true;
-            return job;
-        } catch (error) {
-            settled = error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500;
-            throw error;
-        } finally {
-            if (settled) await Promise.allSettled(ids.map(id => this.modelInputs.discard(id)));
-        }
+        const body = await this.modelInputs.forSubmission(submission, attachmentIds);
+        const job = validateJob(await this.request(body instanceof Blob ? "/model-runs/with-inputs" : "/model-runs", "POST", body));
+        if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
+        return job;
     }
 
     /** Read a temporal stack's owned CSV without converting exact scalar text.

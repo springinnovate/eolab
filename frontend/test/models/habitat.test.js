@@ -1095,7 +1095,7 @@ test("manual Ecosystem inputs select filtered drawn layers and capture them toge
     assert.deepEqual(h.uploads[1].collection, captured, "both choices were copied before the first upload");
     assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: {kind: "capturedVector", reference: h.uploads[0].reference, layerName: "features", filter: study.filter}});
     assert.deepEqual(h.requests[0].inputs.references, {kind: "vector", selection: {kind: "capturedVector", reference: h.uploads[1].reference, layerName: "features", filter: references.filter}});
-    assert.deepEqual(h.released, []);
+    assert.deepEqual(h.released, h.uploads.map(upload => upload.reference.id));
 
     h.controller.chooseModel(model);
     assert.equal(h.view.setup.inputs.area.source.querySelectorAll("optgroup").some(group => group.label === "Drawn polygons"), true);
@@ -1126,7 +1126,7 @@ test("one drawn layer used for both inputs uploads once and duplication keeps th
     await h.controller.submit();
     assert.deepEqual(h.requests[1].inputs, h.requests[0].inputs);
     assert.equal(h.uploads.length, 1);
-    assert.deepEqual(h.released, [], "a duplicated request does not own the original run's reference");
+    assert.deepEqual(h.released, [h.uploads[0].reference.id], "only the original submission owns a device attachment");
     assert.match(h.controller.state.error, /Select the layer again/);
     assert.equal(h.controller.state.pending, null);
 });

@@ -70,29 +70,16 @@ export class PendingModelInputs {
 
     /** Attach locally retained sources to the compact run in declared input order.
      * @param {Object} submission Original model invocation, including its stable retry ID.
-     * @return {Promise<{body:Object|Blob,ids:string[]}>} Request body and attached IDs to release on acknowledgement.
+     * @param {string[]} ids Inputs captured for this submission on this device.
+     * @return {Promise<Object|Blob>} Compact invocation or its multipart NDJSON body.
      */
-    async forSubmission(submission) {
-        const ids = new Set();
-        /** Collect private source IDs from selections and polygon groups without interpreting recipe roles.
-         * @param {*} value Input subtree.
-         * @return {void}
-         */
-        function collect(value) {
-            if (!value || typeof value !== "object") return;
-            if (value.kind === "capturedVector") ids.add(value.reference.id);
-            if (value.kind === "drawing" && value.polygonArea?.id) ids.add(value.polygonArea.id);
-            if (value.enabled === false && Array.isArray(value.rules)) return;
-            Object.values(value).forEach(collect);
-        }
-        collect(submission.inputs);
+    async forSubmission(submission, ids) {
         const attached = [], parts = [];
         for (const id of ids) {
             const source = this.indexedDB ? (await this.transaction("readonly", store => store.get(id)))?.body : this.memory.get(id);
             if (source) { attached.push(id); parts.push(source, "\n"); }
         }
-        const body = attached.length ? new Blob([JSON.stringify(submission), "\n", JSON.stringify(attached), "\n", ...parts],
+        return attached.length ? new Blob([JSON.stringify(submission), "\n", JSON.stringify(attached), "\n", ...parts],
             {type: "application/x-ndjson"}) : submission;
-        return {body, ids: attached};
     }
 }
