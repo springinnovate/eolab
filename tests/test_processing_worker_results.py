@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
+import weakref
 
 import numpy as np
 import pytest
@@ -47,8 +48,40 @@ def test_real_plan_worker_and_public_result(
         "read",
         Mock(side_effect=AssertionError("Catalog files are immutable")),
     )
-    authorizer = SimpleNamespace(authorize=AsyncMock(return_value=authorized))
+    class InputDocuments(dict[str, dict[str, Any]]):
+        """Decoded source documents whose lifetime can be observed without retaining them."""
+
+    loaded: list[weakref.ReferenceType[InputDocuments]] = []
+
+    def read_documents(job_id: str, attempt_id: str) -> InputDocuments:
+        """Return the claimed job's private source and record a weak reference to it.
+
+        Args:
+            job_id: Claimed fixture job used as the source key.
+            attempt_id: Worker attempt reading the source.
+
+        Returns:
+            Drawing documents owned by the worker until it writes its GeoPackage.
+        """
+        documents = InputDocuments({job_id: {"features": []}})
+        loaded.append(weakref.ref(documents))
+        return documents
+
+    def authorize_after_capture(source: Any) -> SimpleNamespace:
+        """Return the fixture raster once the decoded vector inputs have been released.
+
+        Args:
+            source: Raster reference requested by the calculation.
+
+        Returns:
+            The authorized raster with its original path and signature.
+        """
+        assert loaded and loaded[0]() is None
+        return authorized
+
+    authorizer = SimpleNamespace(authorize=AsyncMock(side_effect=authorize_after_capture))
     store = Mock()
+    store.read_job_inputs.side_effect = read_documents
     store.get_cached_calculation_results.return_value = {}
     identifier = "a" * 32
     limits = RasterClipLimits()
@@ -66,6 +99,7 @@ def test_real_plan_worker_and_public_result(
     row = {
         "id": identifier,
         "input_uploads": {},
+        "has_input_payloads": True,
         "attempt_id": "b" * 32,
         "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,

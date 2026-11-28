@@ -406,6 +406,7 @@ class ProcessingWorker:
                 row["captured_vector_files"] = await asyncio.shield(writing)
             finally:
                 await finish_source_task(writing)
+            del collections
         authorized = None
         checksum = None
         if isinstance(calculation, handler.queued_type):
