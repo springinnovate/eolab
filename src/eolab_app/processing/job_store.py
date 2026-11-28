@@ -290,13 +290,16 @@ class PostgresJobStore:
             )
             return identifier
 
-    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
-        """Read an unexpired input belonging to the current Processing session.
+    def get_input(
+        self, owner: str, identifier: str, checksum: str, media_type: str, *, include_geometry: bool = True
+    ) -> dict[str, Any]:
+        """Read a staged input owned by this session in the format its reader expects.
 
         Args:
             owner: Current browser-session hash.
             identifier: Opaque input ID returned by save_input.
             checksum: Expected immutable content identity.
+            media_type: Format required by the caller before returning any payload.
             include_geometry: Read the saved polygons. Tile requests only need the access check.
 
         Returns:
@@ -308,8 +311,8 @@ class PostgresJobStore:
         with self._transaction() as cursor:
             cursor.execute(
                 "SELECT CASE WHEN %s THEN payload ELSE '{}'::jsonb END AS payload "
-                "FROM processing.inputs WHERE id=%s AND owner=%s AND sha256=%s AND expires_at>now()",
-                (include_geometry, identifier, owner, checksum),
+                "FROM processing.inputs WHERE id=%s AND owner=%s AND sha256=%s AND media_type=%s AND expires_at>now()",
+                (include_geometry, identifier, owner, checksum, media_type),
             )
             row = cursor.fetchone()
         if row is None:

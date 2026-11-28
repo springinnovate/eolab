@@ -156,13 +156,16 @@ class JobStore(Protocol):
         """
         ...
 
-    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
-        """Read an owned, unexpired input with the expected identity.
+    def get_input(
+        self, owner: str, identifier: str, checksum: str, media_type: str, *, include_geometry: bool = True
+    ) -> dict[str, Any]:
+        """Read an owned, unexpired input with the expected identity and format.
 
         Args:
             owner: Browser-session hash.
             identifier: Opaque retained input identifier.
             checksum: Expected content identity.
+            media_type: Format required by the reader.
             include_geometry: Return coordinates when needed by the reader.
 
         Returns:

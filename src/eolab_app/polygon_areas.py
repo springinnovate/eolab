@@ -131,7 +131,7 @@ class PolygonAreaUploadResponse(BaseModel):
 
 
 async def read_polygon_area_input(
-    get_input: Callable[[str, str, str], dict[str, Any]],
+    get_input: Callable[[str, str, str, str], dict[str, Any]],
     owner: str,
     reference: PolygonAreaReference,
 ) -> PolygonSummaryInput:
@@ -140,7 +140,7 @@ async def read_polygon_area_input(
     Storage errors propagate to the caller for translation.
 
     Args:
-        get_input: Storage read that checks owner, expiry and content identity.
+        get_input: Storage read that checks owner, expiry, checksum and media type.
         owner: Server-derived browser-session hash.
         reference: Temporary input ID and expected geometry hash.
 
@@ -161,7 +161,7 @@ async def read_polygon_area_input(
             ValueError: If the stored geometry is invalid.
         """
         return PolygonSummaryInput.model_validate(
-            get_input(owner, reference.id, reference.sha256)
+            get_input(owner, reference.id, reference.sha256, "application/json")
         )
 
     return await asyncio.to_thread(load_polygons)
