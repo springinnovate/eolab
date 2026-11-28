@@ -39,6 +39,7 @@ from nhi_terrestrial_integrity_modeling.earth_engine_stack import (
 import numpy as np
 import rasterio
 from rasterio.crs import CRS
+from rasterio.enums import ColorInterp
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from shapely.prepared import prep
@@ -295,7 +296,7 @@ def _get_tile_band_sources(
     tile: Path,
     band_indexes: tuple[int, ...],
     scratch: Path,
-) -> dict[int, tuple[Path, int]]:
+) -> dict[int, tuple[Path, int, ColorInterp]]:
     """Pin requested original or band-readable pixels from one immutable cache tile.
 
     Args:
@@ -304,7 +305,8 @@ def _get_tile_band_sources(
         scratch: Private directory for this tile's working files and retained links.
 
     Returns:
-        Original index mapped to its source filename and one-based readable band.
+        Original index mapped to its path, one-based band and GDAL color interpretation.
+        Derived single-band GeoTIFFs use the driver's default gray interpretation.
         Pixel-interleaved tiles publish only missing selected bands. Their v1
         values combine the declared NoData and source mask, preserving valid zero.
 
@@ -318,14 +320,17 @@ def _get_tile_band_sources(
     for index in band_indexes:
         cached = shared / f"{index}.tif"
         if cached.is_file():
-            inputs[index] = (cached, 1)
+            inputs[index] = (cached, 1, ColorInterp.gray)
         else:
             missing.append(index)
     if not missing:
         return inputs
     with rasterio.open(tile) as source:
         if source.profile.get("interleave") != "pixel" or source.count == 1:
-            inputs.update({index: (tile, index) for index in missing})
+            colors = source.colorinterp
+            inputs.update(
+                {index: (tile, index, colors[index - 1]) for index in missing}
+            )
             return inputs
         scratch.mkdir()
         shared.mkdir(exist_ok=True)
@@ -351,7 +356,7 @@ def _get_tile_band_sources(
                 target.offsets = (offsets[index - 1],)
                 target.write(values, 1)
             publish_band_tile(local, shared / local.name)
-            inputs[index] = (local, 1)
+            inputs[index] = (local, 1, ColorInterp.gray)
     return inputs
 
 
@@ -402,19 +407,19 @@ def prepare_habitat_band_views(
                 on_tile(len(sources))
         paths = {}
         for name, index in zip(band_names, indexes, strict=True):
-            groups: dict[int, list[Path]] = {}
+            # BuildVRT skips individual sources with different color interpretations.
+            groups: dict[tuple[int, ColorInterp], list[Path]] = {}
             for selected in sources:
-                path, readable_index = selected[index]
-                groups.setdefault(readable_index, []).append(path)
+                path, readable_index, color = selected[index]
+                groups.setdefault((readable_index, color), []).append(path)
             view = root / f"band-{index}.vrt"
             if len(groups) == 1:
-                readable_index, paths_for_band = next(iter(groups.items()))
+                (readable_index, _), paths_for_band = next(iter(groups.items()))
                 write_band_mosaic(view, paths_for_band, readable_index, grid)
             else:
-                # Original band-interleaved and derived single-band tiles can coexist.
                 parts = []
-                for readable_index, paths_for_band in groups.items():
-                    part = root / f"group-{index}-{readable_index}.vrt"
+                for (readable_index, color), paths_for_band in groups.items():
+                    part = root / f"group-{index}-{readable_index}-{color.name}.vrt"
                     write_band_mosaic(part, paths_for_band, readable_index)
                     parts.append(part)
                 write_band_mosaic(view, parts, 1, grid)
