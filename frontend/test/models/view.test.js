@@ -33,6 +33,18 @@ test("run detail distinguishes queue wait, elapsed calculation and time to all r
     h.view.run = null;
     h.view.render(h.state);
     assert.match(h.view.run.estimate.textContent, /18–34 seconds/);
+    for (const status of ["queued", "running"]) {
+        saved.status = status;
+        const prefix = status === "queued" ? "Once started, results" : "Results";
+        for (const [upperSeconds, maximum] of [[59, "59 seconds"], [60, "1 minute"], [61, "2 minutes"],
+            [3599, "60 minutes"], [3600, "1 hour"], [3601, "2 hours"]]) {
+            saved.completionEstimate = {lowerSeconds: 0, upperSeconds};
+            h.view.run = null;
+            h.view.render(h.state);
+            assert.ok(h.view.run.estimate.textContent.endsWith(`${prefix} are expected within ${maximum}.`),
+                h.view.run.estimate.textContent);
+        }
+    }
     saved.completionEstimate = {lowerSeconds: null, upperSeconds: null}; h.view.render(h.state);
     assert.match(h.view.run.estimate.textContent, /Estimating time until results are ready…/);
     for (const status of ["cancelling", "failed", "cancelled", "ready"]) {
