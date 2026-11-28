@@ -35,9 +35,10 @@ function fixture(selectFeatures=async()=>({matched:2,featureIds:['1','9007199254
     const document=new Control();document.querySelector=()=>root;document.createElement=()=>new Control();
     const capture=new Set();container.setPointerCapture=id=>capture.add(id);container.hasPointerCapture=id=>capture.has(id);container.releasePointerCapture=id=>capture.delete(id);
     const map={dragEnabled:true,getContainer:()=>container,dragging:{enabled:()=>map.dragEnabled,disable:()=>{map.dragEnabled=false;},enable:()=>{map.dragEnabled=true;}},
-        on(){},off(){},mouseEventToLatLng:event=>({lng:event.clientX/10,lat:event.clientY/10})};
+        on(){},off(){},mouseEventToContainerPoint:event=>({x:event.clientX,y:event.clientY}),
+        containerPointToLatLng:point=>({lng:point.x/10,lat:point.y/10})};
     const layers=[];
-    const layer=()=>({addTo(){layers.push(this);return this;},remove(){this.removed=true;},setLatLngs(points){this.points=points;}});
+    const layer=()=>({addTo(){layers.push(this);return this;},remove(){this.removed=true;},points:[],addLatLng({lat,lng}){this.points.push([lat,lng]);}});
     const leaflet = {
         polyline: () => layer(),
         polygon: (_points, options) => Object.assign(layer(), {type:'polygon', options}),
@@ -132,6 +133,62 @@ test('an open drag previews the shaded polygon that release selects', () => {
     h.tools.finishStroke(pointer(20,30));
     assert.deepEqual(submitted, {type:'Polygon', coordinates:[[[1,1],[3,1],[2,3],[1,1]]]});
     assert.equal(preview.removed, true);
+});
+
+for (const {gesture, samples, end, expected} of [
+    {
+        gesture:'one movement crosses two earlier edges',
+        samples:[[0,0],[0,40],[20,40],[20,10],[40,10],[40,25]], end:[-10,25],
+        expected:[[2,2.5],[2,1],[4,1],[4,2.5],[2,2.5]],
+    },
+    {
+        gesture:'touching an earlier vertex',
+        samples:[[0,0],[20,0],[40,0],[40,20],[20,20]], end:[20,0],
+        expected:[[2,0],[4,0],[4,2],[2,2],[2,0]],
+    },
+    {
+        gesture:'approaching an earlier edge along its direction',
+        samples:[[0,10],[20,10],[20,25],[40,25],[40,10]], end:[10,10],
+        expected:[[2,1],[2,2.5],[4,2.5],[4,1],[2,1]],
+    },
+    {
+        gesture:'crossing less than three pixels after a sample',
+        samples:[[10,0],[30,0],[30,20],[20,20],[20,1]], end:[20,-1],
+        expected:[[2,0],[3,0],[3,2],[2,2],[2,0.1],[2,0]],
+    },
+]) {
+    test(`lasso selects the first loop on contact: ${gesture}`, () => {
+        const submissions = [];
+        const h = fixture(async (_source, area) => {
+            submissions.push(area);
+            return {matched:1, geometry:null};
+        });
+        h.tools.setMode('lasso');
+        h.tools.beginStroke(pointer(...samples[0]));
+        for (const sample of samples.slice(1)) h.tools.moveStroke(pointer(...sample));
+        assert.equal(submissions.length, 0);
+        h.tools.moveStroke(pointer(...end));
+        assert.deepEqual(submissions, [{type:'Polygon', coordinates:[expected]}]);
+        assert.equal(h.container.hasPointerCapture(1), false);
+        h.tools.moveStroke(pointer(55,55));
+        h.tools.finishStroke(pointer(60,60));
+        assert.equal(submissions.length, 1);
+    });
+}
+
+test('releasing a straight stroke or tracing it back across an earlier edge selects no area', () => {
+    let submissions = 0;
+    const h = fixture(async () => { submissions++; return {matched:0, geometry:null}; });
+    h.tools.setMode('lasso');
+    for (const end of [[60,0],[5,0]]) {
+        h.tools.beginStroke(pointer(0,0));
+        h.tools.moveStroke(pointer(20,0));
+        h.tools.moveStroke(pointer(40,0));
+        h.tools.finishStroke(pointer(...end));
+        assert.equal(submissions, 0);
+        assert.match(h.status.textContent, /Drag around an area/);
+        assert.equal(h.container.hasPointerCapture(1), false);
+    }
 });
 
 test('parent-off startup keeps Pan and blocks shortcut, toolbar, and programmatic mode requests', () => {

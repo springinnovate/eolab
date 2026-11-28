@@ -50,7 +50,7 @@ Use **Pan** to move around the map or **Picker** to read raster values and inspe
 
 To show friendly field labels, units, or currency in **Features**, open **Field display** on a selected feature and choose **Download template**. Edit the CSV, then choose **Import field formats** to preview your changes. Applying the import replaces the display settings for that layer in your map.
 
-To select several features, choose **Lasso**, pick a vector layer, and drag around the area you want to inspect. EOLab selects whole features that intersect the area and match the layer’s filters. Draw again to replace the selection or choose **Clear selection**.
+To select several features, choose **Lasso**, pick a vector layer, and drag around the area you want to inspect. Cross your own line to select just the loop, or release to close the outline back to where you started. EOLab selects whole features that intersect the area and match the layer’s filters. Draw again to replace the selection or choose **Clear selection**.
 
 Choose **Histogram box** to place the sampling box at a click, or open **Histograms** for saved polygons. Enter the box width in kilometers or hold **Alt** and scroll to resize it. **1D** plots the distribution for each visible raster. A log scale makes small bars easier to see. **2D** compares the top two visible continuous rasters. Reorder the layers to change the pair or swap X and Y. Larger squares show more common pairs of values. Matching colors locate them on the map.
 
