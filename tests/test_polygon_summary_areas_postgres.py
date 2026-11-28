@@ -4,6 +4,7 @@ import asyncio
 from contextlib import closing
 import json
 from pathlib import Path
+from threading import get_ident
 from uuid import uuid4
 from typing import Any
 
@@ -11,6 +12,7 @@ import httpx2
 import numpy
 import pytest
 from fastapi.testclient import TestClient
+from shapely.geometry import Polygon
 
 from eolab_app.main import create_app
 from eolab_app.processing.job_events import PostgresJobEvents
@@ -24,15 +26,25 @@ from test_polygon_summary_areas import rectangle
 
 
 def test_vector_input_accounts_for_multilingual_notes_in_utf8(
-    boundary: Any, store: PostgresJobStore
+    boundary: Any, store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Stage editor-valid notes using the same compact UTF-8 size as the source document.
 
     Args:
         boundary: Real Processing HTTP routes.
         store: Disposable database holding the staged input.
+        monkeypatch: Observe where the original polygons are validated.
     """
     client = boundary[0]
+    event_loop_thread = client.portal.call(get_ident)
+    validation_threads = set()
+
+    def observe_polygon(ring: list[tuple[float, float]]) -> Polygon:
+        """Record the validation thread and construct the real polygon from its ring."""
+        validation_threads.add(get_ident())
+        return Polygon(ring)
+
+    monkeypatch.setattr("eolab_app.editable_polygon.Polygon", observe_polygon)
     note = "森" * 8000
     collection = {
         "type": "FeatureCollection",
@@ -51,6 +63,7 @@ def test_vector_input_accounts_for_multilingual_notes_in_utf8(
         "/api/processing/vector-inputs", json=collection, headers=HEADERS
     )
     assert response.status_code == 200, response.text
+    assert validation_threads and event_loop_thread not in validation_threads
     with store._transaction() as cursor:
         cursor.execute(
             "SELECT bytes, payload FROM processing.inputs WHERE id=%s",

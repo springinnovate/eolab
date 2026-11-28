@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
 from starlette.responses import FileResponse, StreamingResponse
@@ -631,16 +632,24 @@ def create_processing_router(
     @router.post(
         "/vector-inputs",
         response_model=ProcessingInputReference,
-        openapi_extra=MUTATION_SCHEMA,
+        openapi_extra={
+            **MUTATION_SCHEMA,
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": {
+                    "$id": "urn:eolab:processing:drawing-input",
+                    **DrawingFeatureCollection.model_json_schema(),
+                }}},
+            },
+        },
     )
     async def capture_vector_input(
-        body: DrawingFeatureCollection, request: Request, response: Response
+        request: Request, response: Response
     ) -> ProcessingInputReference:
         """Save committed drawing features for this browser's model submissions.
 
         Args:
-            body: Editor GeoJSON with original IDs, names, notes and WGS84 polygons.
-            request: Request carrying the browser's Processing session.
+            request: Size-checked editor GeoJSON and the browser's Processing session.
             response: Response receiving the session cookie and private-cache headers.
 
         Returns:
@@ -652,9 +661,15 @@ def create_processing_router(
         owner = get_processing_session_owner_hash(
             request, response, session_ttl_seconds
         )
-        return await _await_service_result(
-            service.capture_vector_input(owner, body.model_dump(mode="json"))
-        )
+        try:
+            return await _await_service_result(
+                asyncio.to_thread(service.capture_vector_input, owner, await request.body())
+            )
+        except ValidationError as error:
+            raise RequestValidationError([
+                {**entry, "loc": ("body", *entry["loc"])}
+                for entry in error.errors(include_input=False, include_context=False, include_url=False)
+            ]) from error
 
     @router.delete("/vector-inputs/{area_id}", openapi_extra=MUTATION_SCHEMA)
     @router.delete("/polygon-areas/{area_id}", openapi_extra=MUTATION_SCHEMA)

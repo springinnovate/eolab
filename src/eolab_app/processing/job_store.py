@@ -236,7 +236,7 @@ class PostgresJobStore:
         self,
         owner: str,
         checksum: str,
-        payload: dict[str, Any],
+        document: str,
         *,
         media_type: str = "application/json",
         maximum_bytes: int = 8 * 1024**2,
@@ -246,7 +246,7 @@ class PostgresJobStore:
         Args:
             owner: Current Processing browser-session hash.
             checksum: Operation-owned content identity.
-            payload: Validated JSON input without filesystem paths or credentials.
+            document: Validated compact JSON without filesystem paths or credentials.
             media_type: Format established by its producer for checked admission.
             maximum_bytes: Largest compact UTF-8 document accepted by this producer.
 
@@ -256,9 +256,6 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If the input or shared storage capacity is exceeded.
         """
-        document = json.dumps(
-            payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-        )
         size = len(document.encode("utf-8"))
         if size > maximum_bytes:
             raise ProcessingError(

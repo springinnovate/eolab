@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+from eolab_app.drawings.models import DrawingFeatureCollection
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
 from eolab_app.processing.shared_calculations import (
@@ -1438,29 +1439,28 @@ class ProcessingService:
             )
         return self.changes.subscribe(owner)
 
-    async def capture_vector_input(
-        self, owner: str, collection: dict[str, Any]
+    def capture_vector_input(
+        self, owner: str, body: bytes
     ) -> ProcessingInputReference:
-        """Store a validated GeoJSON source for use by this browser's model runs.
+        """Validate and store a browser's drawing on the input-processing thread.
 
         Args:
             owner: Server-derived Processing session identity.
-            collection: Committed drawing including IDs, attributes, order and geometry.
+            body: Size-checked GeoJSON containing IDs, attributes, order and geometry.
 
         Returns:
             Opaque input reference with a checksum over the whole collection.
 
         Raises:
             ProcessingError: If temporary input storage is full or unavailable.
+            ValueError: If the input is invalid GeoJSON for a drawing.
         """
-        checksum = hashlib.sha256(
-            json.dumps(collection, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        identifier = await asyncio.to_thread(
-            self.jobs.save_input,
+        document = DrawingFeatureCollection.model_validate_json(body).model_dump_json()
+        checksum = hashlib.sha256(document.encode("utf-8")).hexdigest()
+        identifier = self.jobs.save_input(
             owner,
             checksum,
-            collection,
+            document,
             media_type="application/geo+json",
             maximum_bytes=MAX_STAGED_INPUT_BYTES,
         )
@@ -1483,7 +1483,7 @@ class ProcessingService:
         """
         checksum = polygons.geometry_hash()
         identifier = await asyncio.to_thread(
-            self.jobs.save_input, owner, checksum, polygons.model_dump(mode="json")
+            self.jobs.save_input, owner, checksum, polygons.model_dump_json()
         )
         return {
             "polygonArea": {"id": identifier, "sha256": checksum},

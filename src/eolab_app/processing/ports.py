@@ -134,7 +134,7 @@ class JobStore(Protocol):
         self,
         owner: str,
         checksum: str,
-        payload: dict[str, Any],
+        document: str,
         *,
         media_type: str = "application/json",
         maximum_bytes: int = 8 * 1024**2,
@@ -144,7 +144,7 @@ class JobStore(Protocol):
         Args:
             owner: Browser-session hash.
             checksum: Operation-owned content identity.
-            payload: Validated JSON to retain.
+            document: Validated compact JSON text to retain.
             media_type: Producer's format, verified when a job requests retention.
             maximum_bytes: Largest compact UTF-8 document accepted by this producer.
 
