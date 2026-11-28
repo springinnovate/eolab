@@ -32,22 +32,28 @@ def completed_alignment() -> dict[str, Any]:
         "tileCells": 16384,
         "sourceArea": "a",
     }
-    row["summary"].update(
-        timingWork=work,
-        grid={"width": 256, "height": 256},
-        timingHistory=[
+    grid = {"width": 256, "height": 256}
+    cursor = start
+    stages = []
+    for phase, seconds, total in (
+        ("preparing_rasters", 20, 8),
+        ("Fitting response models", 10, 12),
+        ("Predicting raster windows", 28, 4),
+        ("publishing_outputs", 8, 1),
+    ):
+        end = cursor + timedelta(seconds=seconds)
+        stages.append(
             {
-                "work": work,
-                "cells": 65536,
-                "stages": {
-                    "preparing_rasters": {"seconds": 20, "total": 8},
-                    "Fitting response models": {"seconds": 10, "total": 12},
-                    "Predicting raster windows": {"seconds": 28, "total": 4},
-                    "publishing_outputs": {"seconds": 8, "total": 1},
-                },
+                "phase": phase,
+                "startedAt": cursor.isoformat(),
+                "endedAt": end.isoformat(),
+                "total": total,
             }
-            for _ in range(3)
-        ],
+        )
+        cursor = end
+    records = [{"work": work, "grid": grid, "stages": stages} for _ in range(3)]
+    row["summary"].update(
+        timingWork=work, grid=grid, timingHistory=compact_model_timings(records)
     )
     row["progress"] = {
         "phase": "preparing_rasters",
@@ -134,6 +140,12 @@ def test_sparse_history_queue_and_stalled_publication() -> None:
         estimate_habitat_completion(summary, stages, now + timedelta(seconds=60))
         == unknown
     )
+    # A vector-reference run can reach publication without warping any raster masks.
+    # Store timing maps in a different key order, as a PostgreSQL JSONB round trip can.
+    for sample in summary["timingHistory"]:
+        sample["stages"] = dict(sorted(sample["stages"].items()))
+    without_alignment = estimate_habitat_completion(summary, stages[1:], now)
+    assert without_alignment == first
     # A final counted file still awaits verification and the authoritative ready transition.
     stages[-1]["completed"] = 1
     assert (

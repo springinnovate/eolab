@@ -107,9 +107,9 @@ def report_holdout(fixture: Path) -> None:
             "work": replay_workload(run),
             "cells": run["grid"][0] * run["grid"][1],
             "stages": {
-                phase: {"seconds": duration, "total": total}
-                for phase, duration, total in zip(
-                    phases, run["seconds"], run["units"], strict=True
+                phase: {"seconds": duration, "total": total, "position": position}
+                for position, (phase, duration, total) in enumerate(
+                    zip(phases, run["seconds"], run["units"], strict=True)
                 )
             },
         }

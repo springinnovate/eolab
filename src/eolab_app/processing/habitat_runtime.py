@@ -145,6 +145,11 @@ def _remaining_seconds(
     """
     old = sample["work"]
     previous = sample["stages"]
+    # A run using only vector masks can skip raster alignment. JSONB does not
+    # retain map order, so use the historical producer's chronological position.
+    current_position = (
+        previous[next(reversed(observed))]["position"] if observed else -1
+    )
     old_units = previous.get(FIT, {}).get("total")
     old_fits = old_units / (old["folds"] + 1) if old_units else old["responses"]
     current_units = observed.get(FIT, {}).get("total")
@@ -159,7 +164,9 @@ def _remaining_seconds(
     overdue = False
     for phase, historical in previous.items():
         stage = observed.get(phase)
-        if stage and stage["endedAt"] is not None:
+        if historical["position"] < current_position or (
+            stage and stage["endedAt"] is not None
+        ):
             continue
         scale = _stage_work(phase, work, cells, occupied, fits) / _stage_work(
             phase,

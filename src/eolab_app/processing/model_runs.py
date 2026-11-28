@@ -597,8 +597,9 @@ def compact_model_timings(records: list[dict[str, Any]]) -> list[dict[str, Any]]
                     - datetime.fromisoformat(s["startedAt"])
                 ).total_seconds(),
                 "total": s.get("total"),
+                "position": position,
             }
-            for s in stages
+            for position, s in enumerate(stages)
         }
         history.append(
             {
