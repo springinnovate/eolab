@@ -48,7 +48,7 @@ Use a color gradient for continuous measurements such as rainfall. A percentile 
 
 Use **Pan** to move around the map or **Picker** to read raster values and inspect features where you click. The button says **Pixel picker** when only raster picking is available. Choose **Features** from the map tool menu to see the selected features.
 
-To show friendly field labels, units, or currency in **Features**, open **Field display** on a selected feature and choose **Download template**. Edit the CSV, then choose **Import field formats** to preview your changes. Applying the import replaces the display settings for that layer in your map.
+To show friendly field names, units, or currency in **Features**, choose **Edit units and field names** on the vector layer card. This works even when the layer is hidden. Choose **Download prefilled CSV** to get the layer’s current settings. Keep `field` unchanged, enter friendly names in `display_name`, and save the file as UTF-8 CSV. Choose **Upload edited CSV**, review the changes, then choose **Apply to this layer**. Applying the CSV replaces the display settings for that layer view. To preview changes using a feature’s actual values, open **Edit units and field names** from the Feature inspector.
 
 To select several features, choose **Lasso**, pick a vector layer, and drag around the area you want to inspect. EOLab selects whole features that intersect the area and match the layer’s filters. Draw again to replace the selection or choose **Clear selection**.
 

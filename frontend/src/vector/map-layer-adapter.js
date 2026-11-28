@@ -898,7 +898,7 @@ export function createVectorMapLayerAdapter({
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{datasetKind:"vector",sourceOrigin:"upload"|"catalog"|"runArtifact",canInfo:boolean,canFilter:boolean,canEditGeometry?:boolean,
+         * @return {{datasetKind:"vector",sourceOrigin:"upload"|"catalog"|"runArtifact",canInfo:boolean,canFilter:boolean,canEditFieldDisplay:boolean,canEditGeometry?:boolean,
          * filterActive:boolean,filterStatus:string,legend:Object}} Layer actions,
          * filter status and fixed, categorical or graduated legend.
          */
@@ -908,6 +908,7 @@ export function createVectorMapLayerAdapter({
                 sourceOrigin: record.state.source.kind === "upload" || record.state.source.kind === "runArtifact" ? record.state.source.kind : "catalog",
                 canInfo: Boolean(record.state.lifecycle?.info) || !["upload", "runArtifact"].includes(record.state.source.kind),
                 canFilter: true,
+                canEditFieldDisplay: record.state.labelFields.length > 0,
                 canCalculateFields: true,
                 ...(this.canEditGeometry(record) ? {canEditGeometry: true} : {}),
                 error: record.state.fieldRenderingError,

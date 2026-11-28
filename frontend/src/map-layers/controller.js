@@ -152,6 +152,7 @@ export class MapLayerController {
         this.destroyed = false;
         this.view.bind({
             onStyle: (key) => { if (this.canEditStyle()) this.onStyle?.(key); },
+            onEditFieldDisplay: key => { if (this.canEditStyle()) this.onEditFieldDisplay?.(key); },
             onFilter: (key) => this.onFilter?.(key),
             onCalculateFields: (key) => this.onCalculateFields?.(key),
             onEditGeometry: (key) => this.onEditGeometry?.(key),

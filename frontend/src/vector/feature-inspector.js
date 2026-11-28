@@ -398,8 +398,17 @@ export class VectorFeatureInspectorController {
         this.layerName = documentContext.querySelector("#vector-feature-layer");
         this.position = documentContext.querySelector("#vector-feature-position");
         this.attributes = documentContext.querySelector("#vector-feature-attributes");
-        this.fieldDisplay = new VectorFeatureFieldDisplay(documentContext, formatVectorFeatureAttribute,
-            () => this.#showAttributes(this.results[this.resultIndex]));
+        this.editFields = documentContext.querySelector("#vector-feature-field-display");
+        this.fieldDisplay = new VectorFeatureFieldDisplay(documentContext, formatVectorFeatureAttribute, () => {
+            const selected = this.results[this.resultIndex];
+            if (selected) this.#showAttributes(selected);
+        });
+        /** Open the editor for the inspected view and preview its feature values. @return {void} */
+        this.onEditFields = () => {
+            const selected = this.results[this.resultIndex];
+            if (selected) this.openFieldEditor(selected.target.sourceId, selected.feature.properties);
+        };
+        this.editFields.addEventListener("click", this.onEditFields);
         this.previous = documentContext.querySelector("#previous-vector-feature");
         this.next = documentContext.querySelector("#next-vector-feature");
         this.previousSelection = documentContext.querySelector("#previous-vector-selection");
@@ -537,6 +546,7 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     syncVisibleLayers() {
+        this.fieldDisplay.refreshLayer(this.getFieldDisplay);
         const retainedTargets = this.getSelectionTargets();
         const visibleTargets = this.visibleTargets();
         const targets = [...retainedTargets.map(target => ({sourceId: target.key, label: target.label})), ...visibleTargets];
@@ -769,6 +779,9 @@ export class VectorFeatureInspectorController {
         const available = enabled && !this.result.hidden;
         this.styleButton.hidden = !available;
         this.styleButton.disabled = !available;
+        const selected = this.results[this.resultIndex];
+        this.editFields.hidden = !available || !selected || !this.getFieldDisplay(selected.target.sourceId)?.fields.length;
+        if (!enabled && this.fieldDisplay.selection) this.fieldDisplay.close();
     }
 
     /**
@@ -1235,13 +1248,29 @@ export class VectorFeatureInspectorController {
     }
 
     /**
+     * Open the units and names editor for a retained vector view, including hidden layers.
+     * @param {string} key Map layer view whose field settings will be edited.
+     * @param {Object<string,unknown>|null} [properties=null] Selected feature attributes for a value preview.
+     * @return {void}
+     */
+    openFieldEditor(key, properties = null) {
+        if (!this.styleEditingEnabled) return;
+        const display = this.getFieldDisplay(key);
+        if (display?.fields.length) this.fieldDisplay.open({...display, sourceId: key, properties});
+    }
+
+    /**
      * Present the selected feature's attributes using the current view's display settings.
      * @param {InspectedVectorFeature} selected Inspected feature and its original source or published layer.
      * @return {void}
      */
     #showAttributes({feature, target}) {
         const display = this.getFieldDisplay(target.sourceId);
-        this.fieldDisplay.show(display && {...display, sourceId: target.sourceId, properties: feature.properties});
+        const editing = this.fieldDisplay.selection;
+        if (editing?.properties && (editing.sourceId !== target.sourceId || editing.properties !== feature.properties)) {
+            this.fieldDisplay.close();
+        }
+        this.editFields.hidden = !this.styleEditingEnabled || !display?.fields.length;
         this.attributes.replaceChildren();
         const entries = vectorFeatureAttributes(
             feature, target.primaryGeometry, display?.formats, this.#selectionContext.kind
@@ -1284,7 +1313,8 @@ export class VectorFeatureInspectorController {
             "aria-label", "Style selected vector layer"
         );
         this.onCurrentObservationChange(null, null, "inspection");
-        this.fieldDisplay.show(null);
+        this.editFields.hidden = true;
+        if (this.fieldDisplay.selection?.properties) this.fieldDisplay.close();
         this.attributes.replaceChildren();
         this.clearHighlight();
     }
@@ -1309,6 +1339,7 @@ export class VectorFeatureInspectorController {
     destroy() {
         this.clearSelection();
         this.close();
+        this.editFields.removeEventListener("click", this.onEditFields);
         this.fieldDisplay.destroy();
         this.closeButton.removeEventListener("click", this.onClose);
         this.clearButton.removeEventListener("click", this.onClear);

@@ -44,6 +44,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {{canCopy:boolean,canPaste:boolean,pasting:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported compatibility and pending paste state.
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
+ * @property {boolean} [canEditFieldDisplay] This view supplies fields for the units and names editor.
  * @property {boolean} [canFilter] Owner supports filtering.
  * @property {boolean} [canCalculateFields] Owner supports view-owned numeric fields.
  * @property {boolean} [canEditGeometry] Owner supports editing vertices in this duplicate.
@@ -81,6 +82,7 @@ function requireLayerStackElement(documentContext, selector) {
 /**
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
+ * @property {(key: string) => void} [onEditFieldDisplay] Open the units and names editor for this layer.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
  * @property {(key: string) => void} [onCalculateFields] Open the vector field calculator through composition.
  * @property {(key: string) => void} [onEditGeometry] Open the selected layer's polygon editor.
@@ -641,6 +643,12 @@ export class MapLayerStackView {
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             ...(filter ? [filter] : []),
         );
+        if (layer.canEditFieldDisplay && layer.styleEditingEnabled !== false) {
+            const edit = this.#button("Edit units and field names", `Edit units and field names for ${accessibleName}`,
+                layer.key, "edit-field-display", () => this.handlers?.onEditFieldDisplay?.(layer.key), focusTargets);
+            edit.setAttribute("aria-haspopup", "dialog");
+            layerActions.append(edit);
+        }
         if (layer.capabilities?.calculations) {
             const download = this.#button(
                 "Download", `Download raster: ${accessibleName}`, layer.key,

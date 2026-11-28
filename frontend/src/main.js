@@ -1618,6 +1618,7 @@ async function initializeCatalog(
         },
     });
     leafletMap.on("movestart", () => vectorFilterControls.cancelZoom("Map moved. Zoom again to find filtered features."));
+    mapLayerController.onEditFieldDisplay = key => vectorFeatureInspector.openFieldEditor(key);
     mapLayerController.onFilter = key => vectorFilterControls.open(key);
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
     /** Share the active polygon's display outline with the single-raster thumbnail.
@@ -2274,7 +2275,7 @@ async function initializeCatalog(
         const fieldNames = new Set(fields);
         const formats = Object.fromEntries(Object.entries(record.fieldFormats ?? {})
             .filter(([field]) => fieldNames.has(field)));
-        return {fields, numericFields, formats, apply: fieldFormats => {
+        return {label: record.entry.label, fields, numericFields, formats, apply: fieldFormats => {
             if (mapLayerController.getRecord(key) !== record) return false;
             const currentFields = new Set(record.adapter.describeSource(record).fields.map(({name}) => name));
             if (Object.keys(fieldFormats).some(field => !currentFields.has(field))) return false;
