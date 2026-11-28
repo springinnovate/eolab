@@ -19,6 +19,9 @@ from job_service.app import create_app
 from eolab_app.main import create_app as create_eolab
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
 
+from scheduled_jobs_support import ScheduledJobsApp, scheduled_jobs_app, scheduler_api
+from test_processing_jobs import store
+
 JOB = str(uuid4())
 ARTIFACT = str(uuid4())
 SUBMISSION = {
@@ -67,13 +70,16 @@ def wait_for(client: TestClient, job_id: str, expected: str) -> dict:
 
 
 @pytest.mark.parametrize("through_proxy", [False, True])
-def test_success_lifecycle_through_real_boundary(through_proxy: bool) -> None:
+def test_success_lifecycle_through_real_boundary(
+    through_proxy: bool, scheduled_jobs_app: ScheduledJobsApp
+) -> None:
     """Execute and retrieve results directly and through the existing proxy.
 
     Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
         through_proxy: Whether to exercise the HTTP composition boundary.
     """
-    service = create_app()
+    service = scheduled_jobs_app()
     if through_proxy:
         upstream = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service))
 

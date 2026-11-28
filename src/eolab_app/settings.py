@@ -193,6 +193,8 @@ class Settings:
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
             Required at application startup; never sent to the browser.
+        jobs_scheduler_token: Separate server credential granting the Jobs supervisor access
+            to its PostgreSQL tickets. Blank disables the private scheduler interface.
         jobs_max_timeout_seconds: Deployment ceiling for queue and execution
             timeouts requested by the polygon comparison adapter.
     """
@@ -239,6 +241,7 @@ class Settings:
     raster_upload_max_decoded_bytes: int = 256 * 1024**2
     raster_upload_max_block_bytes: int = 16 * 1024**2
     jobs_token: str = field(default="", repr=False)
+    jobs_scheduler_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
     maptiler_api_key: str = field(default="", repr=False)
@@ -291,6 +294,13 @@ class Settings:
         if not 0 < self.jobs_max_timeout_seconds <= 86400:
             raise ValueError(
                 "JOBS_MAX_TIMEOUT_SECONDS must be positive and at most one day"
+            )
+        if self.jobs_scheduler_token and (
+            self.jobs_scheduler_token == self.jobs_token
+            or not re.fullmatch(r"[A-Za-z0-9._~-]{32,256}", self.jobs_scheduler_token)
+        ):
+            raise ValueError(
+                "Use a separate 32–256 character service credential for JOBS_SCHEDULER_TOKEN"
             )
         for environment_variable_name, setting_value in required_text_settings.items():
             if not setting_value:
@@ -576,6 +586,7 @@ def load_settings(
             os.environ.get("SHARED_LAYER_CREATION_WINDOW_SECONDS", "60")
         ),
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
+        jobs_scheduler_token=os.environ.get("JOBS_SCHEDULER_TOKEN", ""),
         jobs_max_timeout_seconds=float(
             os.environ.get("JOBS_MAX_TIMEOUT_SECONDS", "300")
         ),

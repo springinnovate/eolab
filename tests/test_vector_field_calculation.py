@@ -346,7 +346,7 @@ def test_catalog_constant_calculation_survives_jobs_worker_serialization(
         manager = JobManager(Settings())
         await manager.start()
         try:
-            snapshot = manager.submit(
+            snapshot = await manager.submit(
                 "test",
                 "catalog-constant",
                 SubmitJob.model_validate(jobs.submissions[0]),

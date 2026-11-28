@@ -12,7 +12,8 @@ import httpx2
 import pytest
 
 from eolab_jobs.client import JobsClient, JobFailed, MAX_RESPONSE_BYTES, TERMINAL
-from job_service.app import create_app
+from scheduled_jobs_support import ScheduledJobsApp, scheduled_jobs_app, scheduler_api
+from test_processing_jobs import store
 from job_service.configuration import Settings
 
 TOKEN = "client-test-" + "a" * 40
@@ -347,13 +348,18 @@ def test_required_cleanup_accepts_explicit_capacity_rejection(lost_reply: bool) 
 
 
 @asynccontextmanager
-async def diagnostic_client() -> AsyncIterator[tuple[JobsClient, httpx2.AsyncClient]]:
+async def diagnostic_client(
+    scheduled_jobs_app: ScheduledJobsApp,
+) -> AsyncIterator[tuple[JobsClient, httpx2.AsyncClient]]:
     """Run the actual HTTP lifecycle and native executor with isolated callers.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
 
     Yields:
         Authenticated reusable client and its transport for public API assertions.
     """
-    service = create_app(
+    service = scheduled_jobs_app(
         Settings(
             callers={
                 "alice": hashlib.sha256(TOKEN.encode()).hexdigest(),
@@ -387,17 +393,20 @@ async def retained_jobs(http: httpx2.AsyncClient) -> list[dict[str, Any]]:
 
 @pytest.mark.parametrize("mode", ["normal", "delay"])
 @pytest.mark.parametrize("delete", [False, True])
-def test_diagnostic_results_and_explicit_retention(mode: str, delete: bool) -> None:
+def test_diagnostic_results_and_explicit_retention(
+    mode: str, delete: bool, scheduled_jobs_app: ScheduledJobsApp
+) -> None:
     """The client supports non-outline results with explicit retention policy.
 
     Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
         mode: Real diagnostic operation mode.
         delete: Whether the run owns terminal deletion.
     """
 
     async def scenario() -> None:
         """Execute and verify retention exclusively through HTTP."""
-        async with diagnostic_client() as (jobs, http):
+        async with diagnostic_client(scheduled_jobs_app) as (jobs, http):
             result = await jobs.run(
                 {
                     "operation": "diagnostic.v1",
@@ -426,11 +435,12 @@ def test_diagnostic_results_and_explicit_retention(mode: str, delete: bool) -> N
     "mode,timeout,expected", [("exception", 10, "failed"), ("delay", 1, "timed_out")]
 )
 def test_terminal_failures_are_not_results(
-    mode: str, timeout: int, expected: str
+    mode: str, timeout: int, expected: str, scheduled_jobs_app: ScheduledJobsApp
 ) -> None:
     """Expose failed terminal snapshots and retain them when requested.
 
     Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
         mode: Diagnostic failure or delay.
         timeout: Server execution budget.
         expected: Expected authoritative terminal status.
@@ -438,7 +448,7 @@ def test_terminal_failures_are_not_results(
 
     async def scenario() -> None:
         """Run real failing processes without substituting executor behavior."""
-        async with diagnostic_client() as (jobs, http):
+        async with diagnostic_client(scheduled_jobs_app) as (jobs, http):
             with pytest.raises(JobFailed) as failure:
                 await jobs.run(
                     {
@@ -460,12 +470,18 @@ def test_terminal_failures_are_not_results(
     asyncio.run(scenario())
 
 
-def test_low_level_ownership_idempotency_and_cancellation() -> None:
-    """Detached submissions retain ownership, retry identity and explicit cleanup."""
+def test_low_level_ownership_idempotency_and_cancellation(
+    scheduled_jobs_app: ScheduledJobsApp,
+) -> None:
+    """Detached submissions retain ownership, retry identity and explicit cleanup.
+
+    Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
+    """
 
     async def scenario() -> None:
         """Verify each public client method against the real service boundary."""
-        async with diagnostic_client() as (alice, http):
+        async with diagnostic_client(scheduled_jobs_app) as (alice, http):
             bob = JobsClient(http, OTHER_TOKEN)
             payload = {
                 "operation": "diagnostic.v1",
@@ -495,7 +511,9 @@ def test_low_level_ownership_idempotency_and_cancellation() -> None:
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_abandoned_runs_cancel_and_delete(cancel: bool) -> None:
+def test_abandoned_runs_cancel_and_delete(
+    cancel: bool, scheduled_jobs_app: ScheduledJobsApp
+) -> None:
     """Caller cancellation without a deadline and client timeout settle admitted work.
 
     Args:
@@ -504,7 +522,7 @@ def test_abandoned_runs_cancel_and_delete(cancel: bool) -> None:
 
     async def scenario() -> None:
         """Wait for public admission before abandoning the real job."""
-        async with diagnostic_client() as (jobs, http):
+        async with diagnostic_client(scheduled_jobs_app) as (jobs, http):
             task = asyncio.create_task(
                 jobs.run(
                     {
@@ -528,16 +546,19 @@ def test_abandoned_runs_cancel_and_delete(cancel: bool) -> None:
 
 
 @pytest.mark.parametrize("disconnect", [False, True])
-def test_uncertain_submission_recovery_uses_frozen_inputs(disconnect: bool) -> None:
+def test_uncertain_submission_recovery_uses_frozen_inputs(
+    disconnect: bool, scheduled_jobs_app: ScheduledJobsApp
+) -> None:
     """A lost or delayed admission response cannot orphan the real accepted job.
 
     Args:
+        scheduled_jobs_app: Factory using the shared PostgreSQL scheduler.
         disconnect: Cancel while admission response is delayed; otherwise lose it.
     """
 
     async def scenario() -> None:
         """Inject only a transport fault, preserving actual service admission."""
-        async with diagnostic_client() as (_, http):
+        async with diagnostic_client(scheduled_jobs_app) as (_, http):
             accepted, release = asyncio.Event(), asyncio.Event()
             submissions = []
 

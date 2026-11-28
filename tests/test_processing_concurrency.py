@@ -13,11 +13,16 @@ from typing import Any
 from uuid import uuid4
 
 import psycopg
+import httpx2
+from fastapi import FastAPI
 from psycopg.rows import dict_row
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_jobs.job_notifications import PostgresJobWakeup
+from eolab_jobs.client import JobsClient
+from scheduled_jobs_support import ScheduledJobsApp, scheduled_jobs_app, scheduler_api
+from job_service.configuration import Settings as JobsSettings
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -240,6 +245,272 @@ def test_workers_claim_compatible_requests_under_one_slot_limit(
     result = client.get(f"/api/processing/jobs/{next_clip['jobId']}").json()
     assert result["status"] == "ready", result
     assert result["result"]["validPixels"] == 10_000
+
+
+def test_jobs_diagnostic_holds_the_processing_slot_until_native_exit(
+    boundary: Any,
+    store: PostgresJobStore,
+    scheduled_jobs_app: ScheduledJobsApp,
+    scheduler_api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queue a real clip behind a diagnostic submitted through the Jobs client.
+
+    Args:
+        boundary: Processing HTTP client and native raster worker.
+        store: The shared disposable PostgreSQL queue.
+        scheduled_jobs_app: Jobs service using the private scheduler.
+        scheduler_api: Actual private endpoint for simulating lost committed replies.
+        monkeypatch: Observe native process exit at the release boundary.
+    """
+    client, worker, *_ = boundary
+    token = "diagnostic-test-" + "a" * 40
+    settings = JobsSettings(
+        callers={"caller": hashlib.sha256(token.encode()).hexdigest()}
+    )
+    private_http = httpx2.ASGITransport(app=scheduler_api)
+    lost: set[str] = set()
+    children: list[asyncio.subprocess.Process] = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def observe_child(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        """Record the OS handle at native launch.
+
+        Args:
+            args: Executable and arguments.
+            kwargs: Launch settings from the production executor.
+
+        Returns:
+            The original live subprocess handle.
+        """
+        child = await spawn(*args, **kwargs)
+        children.append(child)
+        return child
+
+    async def lose_committed_replies(request: httpx2.Request) -> httpx2.Response:
+        """Drop the first successful claim and stop replies after their database commits.
+
+        Args:
+            request: Unmodified private scheduler request.
+
+        Returns:
+            Actual scheduler response when delivered.
+
+        Raises:
+            httpx2.ReadError: On the first committed claim and first confirmed stop.
+        """
+        response = await private_http.handle_async_request(request)
+        await response.aread()
+        if request.url.path.endswith("/claim") and response.json():
+            action = "claim"
+        elif request.method == "DELETE" and "/attempts/" in request.url.path:
+            assert len(children) == 1 and children[0].returncode is not None
+            action = "stop"
+        else:
+            return response
+        if action not in lost:
+            lost.add(action)
+            raise httpx2.ReadError("Reply lost after commit", request=request)
+        return response
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_child)
+    service = scheduled_jobs_app(
+        settings, transport=httpx2.MockTransport(lose_committed_replies)
+    )
+
+    async def exercise() -> None:
+        """Cancel a running diagnostic and verify the waiting clip's pixel count."""
+        async with (
+            service.router.lifespan_context(service),
+            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service)) as http,
+        ):
+            jobs = JobsClient(http, token)
+            receipt = await jobs.submit(
+                {
+                    "operation": "diagnostic.v1",
+                    "inputs": {"mode": "delay", "seconds": 30},
+                },
+                idempotency_key="shared-slot",
+            )
+            identifier = receipt.jobId
+            async with asyncio.timeout(10):
+                while (await jobs.status(identifier)).status != "running":
+                    await asyncio.sleep(0.02)
+            assert store.interrupt_unfinished_jobs_on_restart() == 0
+            clip = submitted(client, clip_inputs(client))
+            history = client.get("/api/processing/jobs").json()["jobs"]
+            assert [row["jobId"] for row in history] == [clip["jobId"]]
+            assert (
+                not await worker.run_once()
+            ), "Processing started while the diagnostic held the only slot"
+            await jobs.cancel(identifier)
+            async with asyncio.timeout(10):
+                while (await jobs.status(identifier)).status != "cancelled":
+                    await asyncio.sleep(0.02)
+            assert await worker.run_once()
+            result = client.get(f"/api/processing/jobs/{clip['jobId']}").json()
+            assert result["result"]["validPixels"] == 6_400
+            assert lost == {"claim", "stop"} and len(children) == 1
+
+    asyncio.run(exercise())
+
+
+def test_processing_clip_holds_the_slot_before_a_jobs_diagnostic(
+    boundary: Any,
+    store: PostgresJobStore,
+    scheduled_jobs_app: ScheduledJobsApp,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep an admitted diagnostic queued behind a real clip, then return its exact inline value.
+
+    Args:
+        boundary: Running Processing HTTP and native raster worker.
+        store: Shared one-slot database.
+        scheduled_jobs_app: Real Jobs API and restricted child executor.
+        monkeypatch: Pause the clip after its child opens the attempt directory.
+    """
+    client, worker, _, artifacts, _ = boundary
+    monkeypatch.setattr(
+        "eolab_app.processing.raster_operations.clip_process_target", _paused_clip
+    )
+    token = "diagnostic-first-clip-" + "a" * 40
+    service = scheduled_jobs_app(
+        JobsSettings(callers={"test": hashlib.sha256(token.encode()).hexdigest()})
+    )
+    clip = submitted(client, clip_inputs(client))
+    value = {"units": "ha", "values": [0, None, 2.5]}
+
+    async def exercise() -> None:
+        """Check the public queue deadline, the shared ledger and both completed values."""
+        clip_task = asyncio.create_task(worker.run_once())
+        try:
+            async with asyncio.timeout(20):
+                while not list((artifacts.root / "attempts").glob("*/checkpoint")):
+                    await asyncio.sleep(0.02)
+            async with (
+                service.router.lifespan_context(service),
+                httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service)) as http,
+            ):
+                jobs = JobsClient(http, token)
+                payload = {"operation": "diagnostic.v1", "inputs": {"value": value}}
+                queued = await jobs.submit(payload, idempotency_key="after-clip")
+                expiring = await jobs.submit(
+                    {**payload, "queueTimeoutSeconds": 1}, idempotency_key="expires"
+                )
+                async with asyncio.timeout(5):
+                    while (await jobs.status(expiring.jobId)).status == "queued":
+                        await asyncio.sleep(0.02)
+                assert (await jobs.status(expiring.jobId)).status == "expired"
+                assert (await jobs.status(queued.jobId)).status == "queued"
+                with psycopg.connect(store.conninfo) as reader:
+                    assert reader.execute(
+                        "SELECT status FROM processing.jobs WHERE id=%s",
+                        (str(queued.jobId),),
+                    ).fetchone() == ("queued",)
+                assert await clip_task
+                assert (
+                    client.get(f"/api/processing/jobs/{clip['jobId']}").json()[
+                        "result"
+                    ]["validPixels"]
+                    == 6_400
+                )
+                async with asyncio.timeout(10):
+                    while (await jobs.status(queued.jobId)).status != "succeeded":
+                        await asyncio.sleep(0.02)
+                assert (await jobs.result(queued.jobId)).value == {"value": value}
+                assert [
+                    job["jobId"]
+                    for job in client.get("/api/processing/jobs").json()["jobs"]
+                ] == [clip["jobId"]]
+        finally:
+            clip_task.cancel()
+            await asyncio.gather(clip_task, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_diagnostic_result_requires_a_live_fenced_attempt(
+    store: PostgresJobStore,
+    scheduler_api: FastAPI,
+    scheduled_jobs_app: ScheduledJobsApp,
+) -> None:
+    """Refuse a successful child's inline value if its lease expired before acknowledgement.
+
+    Args:
+        store: Shared disposable queue used to expire the live claim.
+        scheduler_api: Private scheduler receiving the release after native exit.
+        scheduled_jobs_app: Public Jobs app with its real child executor.
+    """
+    token = "public-diagnostic-caller-" + "b" * 40
+    settings = JobsSettings(
+        callers={"test": hashlib.sha256(token.encode()).hexdigest()}
+    )
+    private_http = httpx2.ASGITransport(app=scheduler_api)
+
+    last_claim: httpx2.Request | None = None
+
+    async def expire_before_release(request: httpx2.Request) -> httpx2.Response:
+        """Expire the named attempt in PostgreSQL just before accepting its native result.
+
+        Args:
+            request: Jobs supervisor's authenticated private request.
+
+        Returns:
+            Response from the real shared scheduler.
+        """
+        nonlocal last_claim
+        if request.url.path.endswith("/claim"):
+            last_claim = request
+        if request.method == "DELETE":
+            with psycopg.connect(store.conninfo) as database:
+                database.execute(
+                    "UPDATE processing.jobs SET lease_until=now()-interval '1 second' "
+                    "WHERE executor_scope='jobs' AND status='running'"
+                )
+            assert last_claim is not None
+            replay = await private_http.handle_async_request(last_claim)
+            await replay.aread()
+            assert replay.json()["may_start"] is False
+            with psycopg.connect(store.conninfo) as database:
+                assert database.execute(
+                    "SELECT count(*) FROM processing.jobs WHERE status='running'"
+                ).fetchone() == (1,)
+        return await private_http.handle_async_request(request)
+
+    async def exercise() -> None:
+        """Check the private credential boundary, public terminal state and result access."""
+        async with httpx2.AsyncClient(
+            transport=private_http, base_url="http://app"
+        ) as api:
+            denied = await api.get(
+                "/_internal/jobs/executor/session",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert denied.status_code == 403
+        service = scheduled_jobs_app(
+            settings, transport=httpx2.MockTransport(expire_before_release)
+        )
+        async with (
+            service.router.lifespan_context(service),
+            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service)) as http,
+        ):
+            jobs = JobsClient(http, token)
+            submitted_job = await jobs.submit(
+                {"operation": "diagnostic.v1", "inputs": {"value": "stale"}},
+                idempotency_key="expired-at-stop",
+            )
+            async with asyncio.timeout(10):
+                while (await jobs.status(submitted_job.jobId)).status != "failed":
+                    await asyncio.sleep(0.02)
+            with pytest.raises(httpx2.HTTPStatusError) as refused:
+                await jobs.result(submitted_job.jobId)
+            assert refused.value.response.status_code == 409
+            with psycopg.connect(store.conninfo) as database:
+                assert database.execute(
+                    "SELECT count(*) FROM processing.jobs WHERE executor_scope='jobs'"
+                ).fetchone() == (0,)
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("expires", [False, True], ids=["live", "expired"])

@@ -7,11 +7,13 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
+import httpx2
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from job_service.configuration import Settings, load_settings
 from job_service.manager import JobError, JobManager
+from job_service.scheduler import SchedulerClient
 from job_service.operations_registry import OPERATIONS
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -107,13 +109,18 @@ class RequestSizeLimit:
         await self.app(scope, replay, send)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    scheduler_transport: httpx2.AsyncBaseTransport | None = None,
+) -> FastAPI:
     """Create the HTTP application and manage job execution during its lifetime.
 
     Args:
         settings: Optional already-validated configuration for an embedded host
             or isolated test. When supplied, environment loading is skipped.
             Uvicorn's no-argument factory path loads the environment once.
+        scheduler_transport: Optional transport for the private scheduler in embedded hosts.
 
     Returns:
         HTTP app with bounded ephemeral job execution and public discovery/docs.
@@ -122,7 +129,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ValueError: For invalid deployment configuration.
     """
     configuration = settings if settings is not None else load_settings()
-    manager = JobManager(configuration)
+    scheduler_http = httpx2.AsyncClient(
+        base_url="http://app:8000/_internal/jobs/executor/",
+        headers={"Authorization": f"Bearer {configuration.scheduler_token}"},
+        timeout=4,
+        transport=scheduler_transport,
+        trust_env=False,
+    )
+    manager = JobManager(
+        configuration,
+        SchedulerClient(scheduler_http) if configuration.scheduler_token else None,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -134,11 +151,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Yields:
             Control while the manager is running.
         """
-        await manager.start()
-        try:
-            yield
-        finally:
-            await manager.close()
+        async with scheduler_http:
+            await manager.start()
+            try:
+                yield
+            finally:
+                await manager.close()
 
     app = FastAPI(
         title="Job service",
@@ -320,7 +338,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Raises:
             JobError: For invalid operation, conflict or exhausted capacity.
         """
-        snapshot = manager.submit(owner, idempotency_key, payload)
+        snapshot = await manager.submit(owner, idempotency_key, payload)
         response.headers["Location"] = f"{PREFIX}/{snapshot.jobId}"
         return snapshot
 
@@ -378,7 +396,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Raises:
             JobError: If unavailable or no longer queued.
         """
-        return manager.update(owner, job_id, payload.priority)
+        async with manager.queue_changes:
+            return manager.update(owner, job_id, payload.priority)
 
     @app.post(
         f"{PREFIX}/{{job_id}}/cancel", response_model=JobSnapshot, responses=errors

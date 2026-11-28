@@ -25,7 +25,8 @@ class Settings:
     Caller keys are stable owner names; values are SHA-256 credential digests.
     Records and idempotency keys expire together after retention_seconds and
     are lost on restart. A full record store rejects admission, never evicts
-    another caller's unexpired result.
+    another caller's unexpired result. scheduler_token authenticates this supervisor
+    to the private scheduler and is never passed to its native children.
     """
 
     callers: dict[str, str] = field(default_factory=dict, repr=False)
@@ -35,6 +36,7 @@ class Settings:
     execution_seconds: float = 60
     queue_seconds: float = 60
     max_timeout_seconds: float = 300
+    scheduler_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         """Reject invalid capacity/deadline configuration.
@@ -42,6 +44,14 @@ class Settings:
         Raises:
             ValueError: If configuration cannot provide bounded execution.
         """
+        if self.scheduler_token and (
+            not re.fullmatch(r"[A-Za-z0-9._~-]{32,256}", self.scheduler_token)
+            or hashlib.sha256(self.scheduler_token.encode()).hexdigest()
+            in self.callers.values()
+        ):
+            raise ValueError(
+                "Use a separate 32–256 character service credential for JOBS_SCHEDULER_TOKEN"
+            )
         for name in ("queue_capacity", "record_capacity"):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= MAX_RETAINED_RECORDS:
@@ -130,6 +140,7 @@ def load_settings() -> Settings:
     defaults = Settings()
     return Settings(
         callers=callers,
+        scheduler_token=os.environ.get("JOBS_SCHEDULER_TOKEN", ""),
         queue_capacity=_environment_number(
             "JOBS_QUEUE_CAPACITY", defaults.queue_capacity, int
         ),

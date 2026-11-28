@@ -196,7 +196,7 @@ Follow progress in **Runs** while you work. Choose **Cancel run** to stop a calc
 
 ## Deploy EOLab
 
-Start with Docker Compose and a folder on the Docker host containing a georeferenced GeoTIFF or a GeoPackage with a map layer. Set `EOLAB_SCAN_MOUNT_PATH` to the folder’s absolute path. EOLab mounts it read-only. Set the database password, separate GeoServer admin and master passwords, and the Jobs token using the formats in [.env.example](.env.example).
+Start with Docker Compose and a folder on the Docker host containing a georeferenced GeoTIFF or a GeoPackage with a map layer. Set `EOLAB_SCAN_MOUNT_PATH` to the folder’s absolute path. EOLab mounts it read-only. Set the database password, separate GeoServer admin and master passwords, and two distinct tokens for Jobs API callers and scheduler access using the formats in [.env.example](.env.example).
 
 To adjust the upload allowance per browser, set `EOLAB_UPLOAD_OWNER_MAX_FILES` for the file count and `EOLAB_UPLOAD_OWNER_MAX_BYTES` for the total storage in bytes.
 
@@ -237,7 +237,7 @@ A site administrator can issue, replace, or revoke a **Private edit link** in **
 
 If **Map contents** reports a missing drawing position after an upgrade, keep the affected browser’s site data. Reopen the same site on the previous version. In that browser, download each drawing layer as GeoJSON and save a change to the layer order before upgrading again.
 
-Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one worker per site and use separate volumes for each deployment.
+Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app`, `jobs`, and `processing-worker` containers before starting replacements. Run one worker per site and use separate volumes for each deployment.
 
 </details>
 
