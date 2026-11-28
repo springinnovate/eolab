@@ -54,10 +54,12 @@ def test_new_habitat_submissions_reuse_values_after_edits_and_retain_private_own
     climate[22:, 32:] = np.nan
     terrain[22:, 32:] = np.nan
     observed[22:, 32:] = np.nan  # Only the secondary response has data here.
+    fine_observed = observed.repeat(2, axis=0).repeat(2, axis=1)
+    fine_observed += np.random.default_rng(8).normal(0, 0.3, size=fine_observed.shape)
     originals = {
         "climate": climate[::2, ::2],
         "terrain": terrain[::2, ::2],
-        "observed": observed,
+        "observed": fine_observed,
         "secondary": secondary,
         "ref": rows < 12,
     }
@@ -65,7 +67,7 @@ def test_new_habitat_submissions_reuse_values_after_edits_and_retain_private_own
     admitted = {}
     for number, (name, pixels) in enumerate(originals.items()):
         path = tmp_path / f"{name}.tif"
-        spacing = 1000 if name in {"climate", "terrain"} else 500
+        spacing = {"climate": 1000, "terrain": 1000, "observed": 250}.get(name, 500)
         with rasterio.open(
             path,
             "w",
@@ -163,13 +165,15 @@ def test_new_habitat_submissions_reuse_values_after_edits_and_retain_private_own
             """
             predictors = [{"name": "climate", "source": private}]
             responses = [{"name": "observed", "source": catalog["observed"]}]
-            methods = {"predictor_0": "bilinear", "response_0": "nearest"}
+            methods = {"predictor_0": "bilinear", "response_0": "cubic"}
             if selected:
                 predictors.append({"name": "terrain", "source": catalog["terrain"]})
                 responses.insert(
                     0, {"name": "secondary", "source": catalog["secondary"]}
                 )
-                methods.update(predictor_1="nearest", response_1="nearest")
+                methods.update(
+                    predictor_1="nearest", response_0="nearest", response_1="cubic"
+                )
             area = (
                 {
                     "kind": "selectedArea",
@@ -197,21 +201,23 @@ def test_new_habitat_submissions_reuse_values_after_edits_and_retain_private_own
             )
 
         def execute(
-            body: dict[str, Any], cache: Path
+            body: dict[str, Any], cache: Path | None
         ) -> tuple[dict[str, tuple[Any, ...]], int]:
             """Execute a new HTTP submission and fingerprint its score and diagnostics.
 
             Args:
                 body: Public request carrying this run's polygon and variable choices.
-                cache: Shared or fresh parent directory for alignment.
+                cache: Shared or fresh alignment cache, or None to read the full GDAL warp directly.
 
             Returns:
                 Metadata, value and mask fingerprints for all five rasters and
                 the score count returned to the browser.
             """
-            worker.operation_settings = {
-                "habitat.condition.v1": cache / "habitat-cache"
-            }
+            worker.operation_settings = (
+                {"habitat.condition.v1": cache / "habitat-cache"}
+                if cache is not None
+                else {}
+            )
             job = submit(client, {**body, "requestId": uuid4().hex})
             assert job["jobId"] not in ids
             ids.add(job["jobId"])
@@ -253,6 +259,12 @@ def test_new_habitat_submissions_reuse_values_after_edits_and_retain_private_own
 
         first = execute(request(True, False, False), shared)
         assert first[1] > 0
+        uncached = execute(request(True, False, False), None)
+        differences = [
+            name for name, result in first[0].items() if result != uncached[0][name]
+        ]
+        assert differences == []
+        assert first[1] == uncached[1]
         private_scope = (
             shared / "habitat-aligned" / "runs" / parent["jobId"] / file["artifactId"]
         )

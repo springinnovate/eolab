@@ -223,22 +223,25 @@ def _same_lattice(source: rasterio.io.DatasetReader, grid: RasterGrid) -> bool:
 
 
 def _can_align_on_overlapping_tiles(
-    source: rasterio.io.DatasetReader, grid: RasterGrid
+    source: rasterio.io.DatasetReader, grid: RasterGrid, method: Resampling
 ) -> bool:
-    """Identify affine grids whose interpolation support is independent of extent.
+    """Identify nearest-neighbor samples independent of the destination extent.
 
-    GDAL estimates source sampling scales from the destination warp extent.
-    Reprojection and fractional cell-size ratios can change interpolated
-    values when the AOI changes. A common, axis-aligned binary lattice has
-    exact pixel offsets and fixed scale on every geographic tile.
+    GDAL estimates kernel support from the destination footprint, including
+    partial coverage at an original source boundary. Neighborhood resamplers
+    therefore keep the full grid even on a common binary lattice. Nearest
+    samples on that lattice have exact and extent-independent pixel addresses.
 
     Args:
         source: Authorized input raster.
         grid: Requested north-up model grid.
+        method: Requested GDAL resampling method.
 
     Returns:
         Whether aligned values can be addressed by global tile coordinates.
     """
+    if method != Resampling.nearest:
+        return False
     axes = source.transform
     if source.crs != grid.crs or axes.b or axes.d or axes.a <= 0 or axes.e >= 0:
         return False
@@ -325,7 +328,7 @@ def _manual_band_view(
     scratch.mkdir()
     with rasterio.open(path) as source:
         direct = _same_lattice(source, grid)
-        overlapping = _can_align_on_overlapping_tiles(source, grid)
+        overlapping = _can_align_on_overlapping_tiles(source, grid, method)
     if direct or scope is None:
         with open_warped_raster(path, method, grid, scratch / "source.vrt") as (
             _,

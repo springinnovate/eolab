@@ -115,6 +115,8 @@ def test_manual_alignment_reuses_overlapping_tiles_and_invalidates_inputs(
         (source, _grid(), Resampling.bilinear, 0),
         (replacement, _grid(), Resampling.bilinear, 1),
         (source, _grid(spacing=400), Resampling.bilinear, 1),
+        (source, _grid(500), Resampling.nearest, 1),
+        (source, _grid(500), Resampling.nearest, 0),
     )
     for case, (raster, grid, method, expected_writes) in enumerate(cases):
         attempt = tmp_path / f"run-{case}"
@@ -162,36 +164,40 @@ def test_manual_alignment_reuses_overlapping_tiles_and_invalidates_inputs(
         Resampling.mode,
     ],
 )
-def test_reprojected_band_keeps_full_gdal_kernel_after_area_moves(
+@pytest.mark.parametrize("source_crs", ["EPSG:4326", "EPSG:6933"])
+def test_resampled_band_keeps_full_gdal_kernel_after_area_moves(
     tmp_path: Path,
     method: Resampling,
+    source_crs: str,
 ) -> None:
-    """Compare independent cold, reused and cropped geographic reprojections to GDAL.
+    """Compare cold, reused and cropped geographic or projected resampling to GDAL.
 
     Args:
         tmp_path: Separate attempts and a shared immutable source namespace.
         method: Each resampling method exposed by the Habitat model.
+        source_crs: Geographic reprojection or a binary projected lattice with a partial edge tile.
     """
     original = tmp_path / "geographic.tif"
     study = RasterGrid(
         CRS.from_epsg(6933), from_origin(-8830000, 5340000, 500, 500), 201, 215
     )
-    geographic = transform_bounds(
-        study.crs,
-        "EPSG:4326",
-        *array_bounds(study.height, study.width, study.transform),
-    )
-    pixels = np.random.default_rng(32).normal(size=(411, 521)).astype("float32")
+    bounds = array_bounds(study.height, study.width, study.transform)
+    if source_crs == "EPSG:4326":
+        bounds = transform_bounds(study.crs, source_crs, *bounds)
+        height, width = 411, 521
+    else:
+        height, width = study.height * 2, study.width * 2
+    pixels = np.random.default_rng(32).normal(size=(height, width)).astype("float32")
     pixels[83:99, 188:200] = np.nan
     with rasterio.open(
         original,
         "w",
         driver="GTiff",
-        width=521,
-        height=411,
+        width=width,
+        height=height,
         count=1,
-        crs="EPSG:4326",
-        transform=from_bounds(*geographic, 521, 411),
+        crs=source_crs,
+        transform=from_bounds(*bounds, width, height),
         dtype="float32",
         nodata=np.nan,
     ) as destination:
@@ -219,9 +225,10 @@ def test_reprojected_band_keeps_full_gdal_kernel_after_area_moves(
         ):
             np.testing.assert_array_equal(actual.read_masks(), expected.read_masks())
             np.testing.assert_array_equal(actual.read(), expected.read())
-        assert len(list(scopes["predictor_0"].rglob("grid.tif"))) == (
-            2 if index == 2 else 1
-        )
+        if source_crs == "EPSG:4326" or method != Resampling.nearest:
+            assert len(list(scopes["predictor_0"].rglob("grid.tif"))) == (
+                2 if index == 2 else 1
+            )
 
 
 def test_private_expiry_preserves_active_links_and_reclaims_cached_values(
