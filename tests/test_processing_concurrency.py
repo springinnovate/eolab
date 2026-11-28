@@ -664,6 +664,7 @@ def test_worker_retries_stopped_attempt_after_storage_recovers(
                 )
             await worker.cleanup()
             assert checkpoint.exists()
+            assert store.recover_unstarted_claim(uuid4().hex) is None
             assert native_pid in {child.pid for child in active_children()}
             assert store.claim_next_job() is None
             allow_heartbeat_failure.set()

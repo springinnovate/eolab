@@ -14,7 +14,7 @@ EOLab is an open-source mapping tool for environmental teams. Track rainfall thr
 
 ## Feature tour
 
-[Catalog and styles](#find-datasets-and-build-a-map) · [Pixel values and histograms](#inspect-a-place-and-compare-measurements) · [Area statistics](#calculate-statistics-for-an-area) · [Feature plots and polygon summaries](#plot-attributes-and-summarize-polygons) · [Time series](#follow-observations-through-time) · [Raster clips](#clip-and-download-a-raster) · [Environmental models](#run-environmental-models) · [Parcel planning](#configure-a-parcel-planning-tool) · [Drawing and sharing](#draw-upload-and-share) · [Run results](#keep-the-results-of-a-run)
+[Catalog and styles](#find-datasets-and-build-a-map) · [Pixel values and histograms](#inspect-a-place-and-compare-measurements) · [Area statistics](#calculate-statistics-for-an-area) · [Feature plots and polygon summaries](#plot-attributes-and-summarize-polygons) · [Time series](#follow-observations-through-time) · [Raster clips](#clip-and-download-a-raster) · [Raster calculator](#calculate-a-raster-from-several-layers) · [Environmental models](#run-environmental-models) · [Parcel planning](#configure-a-parcel-planning-tool) · [Drawing and sharing](#draw-upload-and-share) · [Run results](#keep-the-results-of-a-run)
 
 ### Find datasets and build a map
 
@@ -23,34 +23,34 @@ Search the **Catalog** by place name, filename, keyword, author, paper title, or
 <details>
 <summary>Catalog search examples</summary>
 
-- `flood type:raster date:2020` finds raster datasets matching “flood” with observations in 2020. Use `date:2020-01..2020-03` for an inclusive range.
+- `flood type:raster date:2020` finds rasters dated 2020 in the Catalog that match “flood”. Use `date:2020-01..2020-03` for January through March 2020.
 - `category:"Coastal protection"` matches that category label. A plain word such as `coastal` searches more broadly.
-- `type:vector` finds mapped features such as watersheds, `type:temporal` finds observations over time, and `type:nonspatial` finds tables and documents. `format:cog` finds Cloud Optimized GeoTIFFs.
+- `type:vector` finds mapped features such as watersheds, `type:temporal` finds observations over time, and `type:nonspatial` finds tables and documents.
 
 </details>
 
 In **Map contents**, show, hide, rename, or reorder layers. The first layer draws on top. Duplicate a layer to try a second style or filter and keep both views. Copy a style between compatible layers, and use the legend to show readers what the colors mean.
 
-With `EOLAB_MAPTILER_API_KEY` configured in [the environment](.env.example), enter a country, city, or street address in **Find a place** and choose a match to zoom there. The × hides the panel in this browser. To reopen it, choose **Map display → Show place search** in the map tools menu.
+With `EOLAB_MAPTILER_API_KEY` configured in [the environment](.env.example), enter a country, city, or street address in **Find a place** and choose a match to zoom there. If you close the panel, choose **Map display → Show place search** from the map tool menu on the right.
 
-The panels fade together so you can see the map beneath them. Hover over a panel or move keyboard focus into it to bring all panels back to full opacity. When you click the map to inspect a histogram or feature, the visible result stays readable as you pan or sample another spot. Close it, minimize it, or switch tools to let it fade again. Open **Settings** at the bottom of the map tools menu to turn fading off or adjust the delays, fade durations, and idle opacity. EOLab remembers your choices in this browser.
+The map tool menu shows **Choose a tool** or the active tool’s name. To keep the panels fully visible, choose **Settings** and turn off **Fade panels when idle**.
 
 <details>
 <summary>Color scales, category names, and vector labels</summary>
 
-For a vector layer, choose **Categories** or **Numeric ranges** and select an attribute. Under **No value**, turn on **Style separately** to pick a color for features with a missing value. That color has its own legend entry, even when the entire field is missing. A value of `0` uses its category or range color.
+For a vector layer, choose **Categories** or **Numeric ranges** and select an attribute. Under **No value**, turn on **Style separately** to give features with missing values their own color in the legend.
 
-Use a color range for continuous measurements such as rainfall, named colors for land-cover classes, or symbols and labels for vector features. A percentile stretch makes differences visible when a few extreme values dominate the range. Turn on **Style one value separately** to give a value its own color and opacity. For example, set a flood depth of `0` to 0% opacity to show the map underneath. Use **Add color range** to style a range including its endpoints. Enter only **Through** to style everything at or below `1`, or only **From** to color everything at or above `100` magenta. The exact value takes priority, followed by the first matching range. Other values use the gradient. You can import category names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
+Use a color gradient for continuous measurements such as rainfall. A percentile stretch reveals differences when a few extreme values dominate. To show the map through dry areas on a flood-depth layer, use **Style one value separately** and set the opacity for `0` to 0%. Use **Add color range** to highlight an interval. For categories such as land-cover classes, you can import names and colors from CSV. [See the style editor.](docs/images/eolab-dynamic-styling.jpg)
 
 </details>
 
 ### Inspect a place and compare measurements
 
-Use the map tool strip to choose **Pan**, **Picker**, **Histogram box**, or **Lasso**. Picker reads raster values and inspects vector features at a click; it is called **Pixel picker** when only raster picking is enabled. Open **Tools → Features** to inspect selected features. Use **Previous** and **Next** in **Features** when several features are selected. Results stay in the right panel. **All tabs** lists views that don’t fit across the top.
+Use **Pan** to move around the map or **Picker** to read raster values and inspect features where you click. The button says **Pixel picker** when only raster picking is available. Choose **Features** from the map tool menu to see the selected features.
 
-To give fields friendly names or display units and currency in the inspector, choose **Edit units and field names** on the vector layer card, even when the layer is hidden. Choose **Download prefilled CSV** to get its current settings. You can also open the editor from the Feature inspector to preview changes with the selected feature’s actual values. Keep `field` unchanged and enter labels in `display_name`, including for text fields. For numeric fields, enter `number` with `1` decimal place and unit `ha`, or `currency` with code `USD`. Save as CSV UTF-8, then choose **Upload edited CSV**, review the preview, and choose **Apply to this layer**. Blank names use the source field names, and blank number settings use the default value display. Each import replaces that layer view's display settings, so download its current template before editing. Names and formats are saved with the layer in your remembered or published map view and leave the source data unchanged.
+To show friendly field names, units, or currency in **Features**, choose **Edit units and field names** on the vector layer card. This works even when the layer is hidden. Choose **Download prefilled CSV** to get the layer’s current settings. Keep `field` unchanged, enter friendly names in `display_name`, and save the file as UTF-8 CSV. Choose **Upload edited CSV**, review the changes, then choose **Apply to this layer**. Applying the CSV replaces the display settings for that layer view. To preview changes using a feature’s actual values, open **Edit units and field names** from the Feature inspector.
 
-For **Lasso**, choose a vector layer, drag around an area and release. EOLab selects whole original features that intersect the polygon, including boundary touches. Existing layer filters still apply. **Features** shows their attributes and enables plotting, even when the layer is hidden or map highlights are unavailable. Draw again to replace the selection, use **Clear selection** to remove it, or press **Esc** to cancel unfinished work. Closing Features preserves the completed selection. Choose **Pan** to move the map, or press **P** to return to Picker when it is available.
+To select several features, choose **Lasso**, pick a vector layer, and drag around the area you want to inspect. EOLab selects whole features that intersect the area and match the layer’s filters. Draw again to replace the selection or choose **Clear selection**.
 
 Choose **Histogram box** to place the sampling box at a click, or open **Histograms** for saved polygons. Enter the box width in kilometers or hold **Alt** and scroll to resize it. **1D** plots the distribution for each visible raster. A log scale makes small bars easier to see. **2D** compares the top two visible continuous rasters. Reorder the layers to change the pair or swap X and Y. Larger squares show more common pairs of values. Matching colors locate them on the map.
 
@@ -62,7 +62,7 @@ For a categorical raster, point at a cell to read its class and code. The chart 
 
 ### Calculate statistics for an area
 
-Open **Raster statistics** to see a value for one raster or a plot for a stack. The raster name or count opens the layer choices, including hidden rasters. The area name opens choices for a sampling box, selected polygons, or each raster’s full extent. **Values** shows the underlying numbers, and **Download CSV** exports them.
+Open **Raster statistics** to see a value for one raster or compare several rasters in a plot. The raster name or count opens the layer choices, including hidden rasters. The area name opens choices for a sampling box, selected polygons, or each raster’s full extent. **Values** shows the underlying numbers, and **Download CSV** exports them.
 
 <details>
 <summary>Example formulas, thresholds, and exact statistics</summary>
@@ -77,11 +77,9 @@ Use **Data tools → Calculate a raster statistic within an area** to calculate 
 
 In **Features**, **Plot this feature** graphs numeric fields from one feature. **Compare features** plots one or more fields across features selected by Picker or Lasso. To plot X against Y after a Lasso selection, open **Compare features**, use **Choose fields** to select Y, then choose **Scatter** and the X field under **Plot options**. Line, scatter, and bar comparisons give each field its own scale and share the same X axis. In either plot, choose **Stacked bars** under **Plot options** to put the checked fields into one horizontal bar per feature. Stack fields that use the same units. Switch between **Plot** and **Values** to read exact measurements, including missing values.
 
-For selections larger than 1,000 features, use **Features shown** to move through the comparison in the selected sort order. Choose **Plot all** to draw the entire selection. The **Values** table shows up to 1,000 features at a time. Use **Feature numbers** in either plot’s feature picker to jump to a range in the original selection order.
+For large selections, use **Features shown** to page through the comparison or **Plot all** to draw every feature. Select a mark to inspect its feature. In **Values**, use **Zoom to feature** to find it on the map when a location is available.
 
-Select a mark in a comparison plot to inspect its feature while keeping the plot open. When a feature location is available, selecting a mark also highlights and zooms to it; **Zoom to feature** is available from **Values** too. Attribute-only Lasso results do not supply individual feature locations. Make another selection to update the open plot.
-
-In **Features** or **Compare features**, use **Previous selection** and **Next selection** to revisit Picker or Lasso selections, including after a selection that found no features. Within a selection, **Previous** and **Next** step through its individual features. If you go back and select a different set of features, the forward history clears. **Clear selection** removes the results and their history.
+In **Features** or **Compare features**, use **Previous selection** and **Next selection** to revisit a Picker or Lasso selection. **Previous** and **Next** step through features within it.
 
 Use **Layer stats** to show the mean, minimum, or maximum of each plotted field beside the selected values. Each statistic uses all numeric values in its original layer, including features outside the current view or filter.
 
@@ -95,25 +93,23 @@ Use **Data tools → Group polygons and calculate field statistics** to group po
 
 ### Follow observations through time
 
-Find a dataset with `type:temporal`. In **Map contents**, choose a variable, month, and observation time in UTC. Duplicate the layer to compare two dates or variables with different styles.
+Search the **Catalog** for `type:temporal` and add a layer to the map. In **Map contents**, choose a variable and an available observation. Duplicate the layer to compare two dates or variables.
 
-If you save a new layer before its dates load, the map reopens the chosen variable at the first observation in its latest available month. Once a date has loaded, saving the map keeps that exact observation.
-
-Use the timeline at the bottom of the map to drag through a month or press **Play**. During playback, the map loads up to five upcoming dates in the background. Choose **First observation each day** to see changes over a longer period. The arrow buttons step across available months and skip missing observations. When several time layers are visible, use **Layer** to choose which one moves. The current raster and its **On map** time stay visible until the next observation is ready.
+Use the timeline arrows to step through observations or press **Play**. **On map** shows the observation currently displayed. For hourly data, choose **First observation each day** to see daily changes. If several time layers are visible, use **Layer** to choose which one to play.
 
 ![Hourly rainfall over the Atlantic and Africa, with July 1, 2026 at 06:00 UTC selected.](docs/images/eolab-temporal-map.jpg)
 
 *Rainfall at 06:00 UTC on July 1, 2026. A band of rain crosses the tropical Atlantic toward West Africa. Choose another available hour to see how the pattern changes.*
 
-- **Map a statistic per pixel for a time period** calculates a statistic across observations at each pixel, such as maximum temperature during a month. A second map shows **Valid observations per pixel**. Ordinary statistics include the complete value of each overlapping observation. For compatible precipitation-rate data, **Total precipitation (mm)** multiplies each mean rate by the seconds its interval overlaps the selected period. A partial interval gives an estimate assuming a constant rate. Start and end use whole UTC hours.
+- Use **Data tools → Map a statistic per pixel for a time period** to find, for example, the highest temperature at each pixel during a month. The second map shows **Valid observations per pixel**. For compatible precipitation-rate data, **Total precipitation (mm)** estimates rainfall over the selected hours.
 - **Export area statistics over time (CSV)** calculates a statistic across an area's valid pixels for each available observation, such as mean temperature within a watershed over time. The CSV contains one row per observation, including valid pixel counts.
 - **Raster statistics** plots statistics or formulas across the dates you select. Compare an area average with a value at a clicked point, or download the plotted values as CSV. You choose the calculation dates independently of the hour displayed on the map.
 
-Ordinary period statistics weight available observations equally. Gaps remain missing, so check observation counts before comparing periods.
+For a measure such as the mean, each available observation has equal weight. Check observation counts before comparing periods with gaps.
 
 ### Clip and download a raster
 
-In **Map contents**, select **Download** on the raster you want. The panel opens beside that layer. Choose **Visible map area** to use the view captured when you opened the panel, **Entire raster** to export the full extent, or a sampling box or selected polygons. Select **Prepare GeoTIFF**, then **Download GeoTIFF** when it is ready. Select the same layer’s **Download** again to close the panel while preparation continues.
+In **Map contents**, select **Download** on the raster you want. Choose **Visible map area** for the view you had when you opened the panel, **Entire raster** for its full extent, or a sampling box or selected polygons. Select **Prepare GeoTIFF**, then **Download GeoTIFF** when it is ready.
 
 In **Data tools**, choose **Clip a raster to an area**, select a raster, and set the area to the visible map, a sampling box, or selected polygons. Choose **Run tool**. When it finishes, download **Clipped raster** from **Runs**. The GeoTIFF keeps the source pixel size and values.
 
@@ -130,13 +126,9 @@ To clip to several polygon layers, open **Map contents → Polygon groups → Ne
 
 ### Calculate a raster from several layers
 
-Open **Tools → Data tools → Raster calculator**. Add rasters from Map contents or completed runs and use the assigned variables in a formula such as `max(0, b - a)`. Choose a resampling method for each input, an analysis area, and an output grid. Matching a raster uses its projection, cell size, and grid alignment. Custom cell sizes use the chosen projection’s units.
+In **Data tools**, choose **Raster calculator** and add rasters from **Map contents** or completed runs. If `a` is last year’s biomass and `b` is this year’s, `max(0, b - a)` maps gains and sets losses to zero.
 
-Area functions use the valid cells of each raster inside the selected area after resampling to the output grid. Use `a / area_max(a) - b / area_max(b)` to divide each raster by its own maximum and subtract the results, or `(a - area_min(a)) / (area_max(a) - area_min(a))` to scale one raster from 0 to 1.
-
-Use `(a - area_mean(a)) / area_stdev(a)` to express each cell's difference from the area average in population standard deviations. `area_sum(a)` adds the valid cell values, and `area_count(a)` counts those cells, including zeros. Cells missing a referenced raster value or dividing by zero produce NoData.
-
-The calculator includes cells whose centers fall inside the analysis area. Cells with missing formula inputs or undefined arithmetic are blank. In **Runs**, select **Show on map** or **Download** to use the GeoTIFF.
+Choose a resampling method for each input, an analysis area, and an output grid. Area functions such as `area_mean` use valid cells after resampling to that grid. A missing formula input or division by zero gives that cell NoData. Choose **Run tool**, then **Show on map** or **Download** in **Runs**.
 
 ### Run environmental models
 
@@ -187,16 +179,14 @@ The **Planning API** lets participants save private scenarios with one intervent
 - **Bring a project boundary.** Under **Your uploads**, add a GeoJSON file or a GeoPackage containing one polygon layer to keep its attributes. Filter the layer to a country, watershed, or project group and use that selection for statistics or a model.
 - **Reshape a copy.** In **Map contents**, duplicate a GeoPackage polygon layer, choose **Edit geometry**, then click a polygon. Drag its vertices, click an edge to insert one, or hover or focus a vertex and press **Delete**. **Save changes** keeps the edited layer in your browser’s private uploads. Each save uses a file slot for seven days.
 - **Collect observations together.** Create a shared polygon layer or join one with a share code and contributor name. Everyone can see saved contributions and edit their own. **Share layer** makes a private drawing available for collaboration. Saved drawings and their filters can also define an analysis area.
-- **Publish a map.** Choose **Publish map**, give the map a title and link name, and choose which panels, inspection tools and models visitors can use. Turn off **Style editing** to keep the published colors, labels and opacity while visitors explore the data. **Workspace panels** lets you offer **Catalog**, **Map contents**, or neither. Choose separately whether each available panel opens when the map loads; visitors can reopen a collapsed panel. Under **Run models**, check each model visitors can run. Turning off the group keeps the checked models for later. Newly installed models appear in the editor for you to select. Visitors can still open their earlier runs and results. Select **Create map link** and share the **Public map link** with viewers. Keep the **Private edit link** somewhere safe. Anyone with it can open the full editor for that map. **Save changes for everyone** updates the map at the same public URL. **Cancel** returns to the public map. For a lost link or a map published before private editing was available, ask a site administrator to issue a link from **Published maps** at `/admin-eolab`. Administrators can also replace or revoke a link. Older `#view=` links no longer open a saved map. If you still have the original map, publish it to get a named link. Shared drawings update as contributors save. **Reset view** and **Undo reset** let you clear and restore your browser's map.
+- **Publish a map.** Choose **Publish map**, enter a title and link name, and choose what visitors can use, including **Style editing** and **Run models**. Select **Create map link** and share the **Public map link**. Keep the **Private edit link** safe. Anyone with it can edit the map and use **Save changes for everyone** to update the same public link.
 
 <details>
 <summary>Which files stay private, what expires, and what a download includes</summary>
 
-Drawings stay on this device until you share their layer or save them through Planning. A linked tool or published map gives others read access to the saved drawing. Only the browser that created it can edit its polygons. A GeoJSON download includes all saved polygons in the layer, including those hidden by its filter.
+A drawing stays on this device until you share its layer or save it through **Planning tools**. A published map or planning tool linked to a saved drawing lets others read the latest polygons. Only the browser that created the saved drawing can edit them. A GeoJSON download includes every saved polygon in the layer, even those hidden by its filter.
 
-If an upgrade reports a missing drawing position in **Map contents**, keep the browser's site data. Ask the site operator to reopen the same site with the previous version. In that browser, download each layer as GeoJSON and save a change to the drawing layer order before upgrading again.
-
-The server stores private uploads for seven days. GeoJSON polygons are stored as GeoPackages; their converted size counts toward the upload limit. Uploaded files become private dataset layers; they do not become local drawings or contributions to shared drawing sessions. The default per-browser limits are 100 files and 500 MiB total across polygon files and reference masks. **Your uploads** shows the limits for your deployment. An accepted calculation can finish using a file that expires while it runs. Private uploads, local drawings, analysis charts, and run files stay with their owners.
+Private uploads are available to the uploading browser for seven days. **Your uploads** shows the limits for your site. The defaults are 100 files and 500 MiB per browser, including polygon files and reference masks. Uploaded GeoJSON counts toward the limit at its converted GeoPackage size.
 
 </details>
 
@@ -226,7 +216,7 @@ Connect this repository with the Docker Compose build pack and select [docker-co
 
 ### Check your first map
 
-Open **Status** and choose **Scan directories**. When the scan finishes, find your file in the **Catalog**, choose **Add to map**, and check that the layer draws in the expected place.
+Open **Status**, expand the **Catalog** row, and choose **Scan directories**. When the scan finishes, find your file in the **Catalog**, choose **Add to map**, and check that the layer draws in the expected place.
 
 ### Ask an AI for deployment help
 
@@ -241,7 +231,11 @@ Read .env.example, docker-compose.yml, and docker-compose.local.yml. Give me the
 <details>
 <summary>Upgrade an existing site</summary>
 
-Before upgrading, ask your site operator to [check which published maps need attention](scripts/saved-map-upgrade/). Some older maps and links need to be recreated. Keep the map settings and shared-layer invitations you will need to republish. Shared drawings and their notes stay in their layers. The [Site Condition migration](src/eolab_app/saved_maps/migrate.py) preserves that map's URL and shared drawings. Preview the migration, apply it using the reviewed revision, then reopen the same URL and check the shared drawings.
+Before upgrading, [check which published maps need attention](scripts/saved-map-upgrade/). Keep the map settings and shared-layer invitations for any maps you need to republish. If you still have the original map for an old `#view=` link, publish it again to get a **Public map link**. For the Site Condition workshop map, use the [migration command](src/eolab_app/saved_maps/migrate.py) to preserve its URL and shared drawings.
+
+A site administrator can issue, replace, or revoke a **Private edit link** in **Published maps** at `/admin-eolab`.
+
+If **Map contents** reports a missing drawing position after an upgrade, keep the affected browser’s site data. Reopen the same site on the previous version. In that browser, download each drawing layer as GeoJSON and save a change to the layer order before upgrading again.
 
 Back up the Docker volumes and keep their names and the database password. Let active runs finish. Stop the old `app` and `processing-worker` containers before starting replacements. Run one worker per site and use separate volumes for each deployment.
 
@@ -266,8 +260,9 @@ GeoTIFF per available variable per year. The assessment year identifies the
 model inputs; some variables use observations from other periods. Each map
 covers the cached tiles, with uncached areas marked as missing. Rerun the same
 command on the same extracted snapshot to resume. Use a new output folder if
-the snapshot's tile coverage changes. In **Status**, choose **Scan directories**.
-Search **Catalog** for the variable or assessment year and choose **Add to map**.
+the snapshot's tile coverage changes. Open **Status**, expand the **Catalog**
+row, and choose **Scan directories**. Search the **Catalog** for the variable or
+assessment year and choose **Add to map**.
 
 #### Make a temporal layer from GeoTIFFs
 
@@ -282,8 +277,6 @@ python scripts/prepare_temporal_stack.py build rainfall/stack.yaml
 The first command shows dates found in filenames and acquisition or observation tags. Confirm the suggestions, choose what each raster measures, then edit `stack.yaml`. Fill in the variable ID, title and units. The draft keeps conflicting clues beside the affected file. For snapshots choose `year`, `month`, `day` or `timestamp`. For means and totals choose `calendar_year`, `calendar_month`, `calendar_day` or `explicit`. Quote dates such as `"2024"` or `"2024-06"`. Exact timestamps need a timezone. For explicit intervals use e.g. `time: {start: "2024-05-01", end: "2024-10-01"}`; the end is exclusive.
 
 Check the edited manifest, then build it. All observations must share a north-up grid and compatible stored values, units and NoData. If a GeoTIFF declares a time operation in its CF `cell_methods` tag, it must match the manifest (`point` for snapshots, `mean` for means, or `sum` for totals). Gaps are allowed. The build publishes `catalog.sqlite` and `dataset.yaml` beside the original files and requires a filesystem supporting hard links. Both commands protect existing outputs. To add observations, prepare a complete replacement archive between calculations, retain its dataset ID and rescan. Place the complete folder under the data mount and run a Catalog scan. Choose the layer in Map contents to select dates or press **Play**.
-
-A snapshot labeled `"2024"` uses the start of 2024 UTC for date-range selection. An annual total labeled `"2024"` covers the full calendar year. Both display as **2024** on the map. In Models, **Use this period** sets the analysis dates from the observations shown. In Raster Statistics, choosing a map layer’s time range starts with its displayed observation.
 
 <details>
 <summary>Add dataset descriptions, citations, and supporting files</summary>

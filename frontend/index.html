@@ -910,9 +910,14 @@
               <h3 id="models-setup-heading" class="models-name" tabindex="-1" hidden></h3>
               <p id="models-error" class="models-error" role="alert" hidden></p>
               <div id="models-deletions"></div>
-              <div id="models-recovery" hidden>
-                <p id="models-recovery-message" role="status"></p>
-                <button id="models-recover" class="secondary-button" type="button">Retry starting run</button>
+              <div id="models-feedback-home">
+                <div id="models-feedback">
+                  <p id="models-recovery-message" role="status"></p>
+                  <div id="models-recovery" hidden>
+                    <p id="models-submission-elapsed" class="models-help" role="timer" aria-live="off" hidden></p>
+                    <button id="models-recover" class="secondary-button" type="button" hidden>Retry starting run</button>
+                  </div>
+                </div>
               </div>
               <div id="models-library">
                 <label class="models-field" for="models-query">Find a tool<input id="models-query" type="search" placeholder="Search by name or purpose"></label>

@@ -1,7 +1,9 @@
 """Reuse private rasters through real HTTP, PostgreSQL, workers and native readers."""
 
 import asyncio
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
 import hashlib
@@ -725,6 +727,105 @@ def test_input_retention_releases_after_every_terminal_path(
             client.portal.call(worker.cleanup)
             assert path.exists()
             assert store.interrupt_unfinished_jobs_on_restart() == 1
+    assert input_counts(store) == (0, 0)
+    client.portal.call(worker.cleanup)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("outcome", ["rollback", "commit", "cancel", "expire"])
+def test_worker_recovers_unanswered_claim_with_retained_input(
+    model_boundary: Any,
+    store: PostgresJobStore,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    """Complete or finish the exact unanswered claim and let another owner run.
+
+    Args:
+        model_boundary: Real model routes, worker and artifact storage.
+        store: Disposable single-slot PostgreSQL queue.
+        monkeypatch: Fail the claim at the transaction boundary before or after commit.
+        outcome: Roll back, commit normally, cancel the committed job or expire its lease.
+    """
+    client, worker, _ = model_boundary
+    parent, source, path = publish_input(model_boundary)
+    child = submit(
+        client,
+        model_request(
+            client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
+        ),
+    )
+    child_url = f"/api/processing/jobs/{child['jobId']}"
+    assert (
+        client.delete(
+            f"/api/processing/jobs/{parent['jobId']}", headers=HEADERS
+        ).status_code
+        == 200
+    )
+    borrow_connection = store._pool.connection
+
+    @contextmanager
+    def lose_claim_reply() -> Iterator[psycopg.Connection[dict[str, Any]]]:
+        """Lose the database response after a real commit or rollback.
+
+        Yields:
+            Connection participating in the disposable database transaction.
+
+        Raises:
+            psycopg.OperationalError: Once the transaction outcome is durable.
+        """
+        with borrow_connection() as connection:
+            with connection.transaction(force_rollback=outcome == "rollback"):
+                yield connection
+        raise psycopg.OperationalError("claim reply lost")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(store._pool, "connection", lose_claim_reply)
+        with pytest.raises(ProcessingError, match="temporarily unavailable"):
+            client.portal.call(worker.run_once)
+    assert client.get(child_url).json()["status"] == (
+        "queued" if outcome == "rollback" else "running"
+    )
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    original_attempt = store.get(child["jobId"], owner)["attempt_id"]
+    if original_attempt is not None:
+        assert not (worker.artifacts.root / "attempts" / original_attempt).exists()
+    if outcome == "cancel":
+        assert (
+            client.post(child_url + "/cancel", headers=HEADERS).json()["status"]
+            == "cancelling"
+        )
+    elif outcome == "expire":
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                "UPDATE processing.jobs SET lease_until=now()-interval '1 minute' WHERE id=%s",
+                (child["jobId"],),
+            )
+    client.portal.call(worker.cleanup)
+    assert path.exists() and input_counts(store) == (1, 0)
+
+    with TestClient(client.app, base_url="https://testserver") as other:
+        peer = submit(other, model_request(other, "raster-clip"))
+        if outcome == "commit":
+            # Losing the first recovery reply must still leave this lane able to retry.
+            with monkeypatch.context() as fault:
+                fault.setattr(store._pool, "connection", lose_claim_reply)
+                with pytest.raises(ProcessingError, match="temporarily unavailable"):
+                    client.portal.call(worker.run_once)
+        client.portal.call(worker.run_once)
+        client.portal.call(worker.run_once)
+        peer_result = other.get(f"/api/processing/jobs/{peer['jobId']}").json()
+        assert peer_result["status"] == "ready", peer_result
+        assert peer_result["result"]["validPixels"] == 6_400
+
+    result = client.get(child_url).json()
+    if original_attempt is not None:
+        assert store.get(child["jobId"], owner)["attempt_id"] == original_attempt
+    assert result["status"] == {"cancel": "cancelled", "expire": "interrupted"}.get(
+        outcome, "ready"
+    )
+    if result["status"] == "ready":
+        assert Decimal(result["result"]["rows"][0]["value"]) == sum(range(10_000))
     assert input_counts(store) == (0, 0)
     client.portal.call(worker.cleanup)
     assert not path.exists()

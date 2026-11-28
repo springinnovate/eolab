@@ -1,7 +1,7 @@
 /** Own Habitat setup choices, coverage policy and request lifetime. */
 import { vectorSelectionsEqual } from "../selected-area.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
-import { HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
+import { describePreparationAreas, HabitatPreparationSelectionView } from "./habitat-preparation-selection-view.js";
 
 /** Names for the resampling methods accepted by Habitat's input preparation.
  * @type {Record<string,string>}
@@ -467,6 +467,20 @@ function restoreState(draft, inputs) {
     draft.setupState.unavailable = true;
 }
 
+/** Identify the authorized coverage check for a newly captured prepared stack.
+ * @param {Object} draft Habitat setup at the instant its submission was captured.
+ * @param {{sourceKey:(source:Object)=>string,describeFilter:(filter:Object)=>string}} helpers Format the same area label used in setup.
+ * @return {import("./model-setup.js").ModelSubmissionWait|null} Action and selection being checked, or null for manual inputs.
+ */
+function describeSubmissionWait(draft, helpers) {
+    const stack = getHabitatEarthEngineInput(draft);
+    if (!stack) return null;
+    const state = draft.setupState;
+    const index = state.selections.findIndex(selection => vectorSelectionsEqual(selection, state.selectedSelection));
+    const area = describePreparationAreas(state, helpers)[index].label;
+    return {buttonLabel: "Checking prepared inputs…", message: `Checking prepared inputs for ${area} (assessment year ${stack.year})…`};
+}
+
 /** Describe the grid and raster methods actually recorded in a saved Habitat run.
  * @param {Object} invocation Captured recipe definition and accepted input values.
  * @param {string} name Recipe input being described.
@@ -605,4 +619,4 @@ function createSession(draft, dependencies) { return new HabitatSetupSession(dra
 /** Habitat integration registered once at the model setup boundary.
  * @type {import("./model-setup.js").ModelSetupIntegration}
  */
-export const habitatSetup = Object.freeze({showRunNameHelp: false, createState, createInput, captureInput, restoreInput, restoreState, describeInput, buildInput, createSession});
+export const habitatSetup = Object.freeze({showRunNameHelp: false, createState, createInput, captureInput, restoreInput, restoreState, describeInput, describeSubmissionWait, buildInput, createSession});
