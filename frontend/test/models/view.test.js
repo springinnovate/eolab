@@ -529,6 +529,8 @@ test("reopening a run shows field-measured stage durations and partial work", ()
     run.status = "failed"; verification.endedAt = "2026-10-08T00:00:06Z";
     h.view.render(h.state); assert.equal(h.view.run.status.textContent, "Failed");
     assert.match(h.view.run.stageList.children[1].textContent, /2 sec/);
+    verification.endedAt = "2026-10-08T00:00:04.125Z"; h.view.render(h.state);
+    assert.match(h.view.run.stageList.children[1].textContent, /Under 1 sec/);
 });
 
 test("model stages without a description use a running label while lifecycle states take precedence", () => {

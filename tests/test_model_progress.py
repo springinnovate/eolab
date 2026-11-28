@@ -10,7 +10,11 @@ from pydantic import ValidationError
 from eolab_app.processing import model_operations as operations
 from eolab_app.processing.model_run_contracts import ModelJobResponse, ModelProgress
 from eolab_app.processing.model_runs import serialize_model_job
-
+from eolab_app.processing.stage_progress import (
+    merge_stage_progress,
+    stage_snapshot,
+    stage_start,
+)
 
 def model_row(operation: str, progress: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal owned running record without requiring result files.
@@ -44,6 +48,20 @@ def model_row(operation: str, progress: dict[str, Any]) -> dict[str, Any]:
         "expires_at": now + timedelta(days=7),
         "error": None,
     }
+
+
+def test_equal_stage_times_keep_producer_order_and_completed_work() -> None:
+    """A stale same-tick sample preserves the measured count and callback order."""
+    at = datetime(2026, 10, 8, tzinfo=timezone.utc)
+    first, second = stage_start("sampling", at), stage_start("fitting", at)
+    saved = merge_stage_progress(
+        {},
+        stage_snapshot([first, {**second, "completed": 1, "total": 6, "unit": "fits"}]),
+    )
+    late = merge_stage_progress(saved, stage_snapshot([first, second]))
+    assert [stage["phase"] for stage in late["stages"]] == ["sampling", "fitting"]
+    assert late["completed"] == 1 and late["total"] == 6
+    assert late["stages"][0]["endedAt"] == late["stages"][1]["startedAt"]
 
 
 def test_model_snapshot_retains_stage_times_and_completed_work() -> None:

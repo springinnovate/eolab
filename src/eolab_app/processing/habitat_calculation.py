@@ -28,7 +28,7 @@ from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.stage_progress import NativeStageProgress
+from eolab_app.processing.artifacts import NativeStageProgress
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.habitat_models import (
     HabitatCalculationInputs,

@@ -343,7 +343,11 @@ class ModelIdentity(ModelReference):
 
 
 class ModelStageTiming(ModelSchema):
-    """One stage's actual start, latest measured work, end, and optional work counts."""
+    """A named stage's start, most recent measured work, end, and optional counts.
+
+    The last work time initially equals the start. A lease renewal alone does not
+    move it. An ended stage can have incomplete counters when the attempt stopped.
+    """
 
     phase: str
     description: str | None = None
@@ -363,6 +367,7 @@ class ModelProgress(JobProgressResponse):
     operation-owned plain text for the stage, limited to 200 Unicode characters.
     It may be absent for historical responses or unrecognized phases; clients
     then use a generic running-state label without interpreting ``phase``.
+    ``stages`` retains measured intervals in execution order for instrumented runs.
     """
 
     stages: tuple[ModelStageTiming, ...] = ()

@@ -63,8 +63,11 @@ function renderStageTimings(details, list, job) {
     details.hidden = !stages.length;
     const rows = stages.map(stage => {
         const end = stage.endedAt ?? (job.status === "running" ? Date.now() : stage.lastProgressAt);
-        const seconds = Math.max(0, Math.floor((new Date(end) - new Date(stage.startedAt)) / 1000));
-        const duration = seconds >= 60 ? `${Math.floor(seconds / 60)} min ${seconds % 60} sec` : `${seconds} sec`;
+        const milliseconds = Math.max(0, new Date(end) - new Date(stage.startedAt));
+        const seconds = Math.floor(milliseconds / 1000);
+        let duration = `${seconds} sec`;
+        if (seconds >= 60) duration = `${Math.floor(seconds / 60)} min ${seconds % 60} sec`;
+        if (milliseconds > 0 && seconds === 0) duration = "Under 1 sec";
         const parts = [stage.description ?? "Model stage", duration];
         if (stage.total != null) parts.push(`${stage.completed ?? 0} of ${stage.total} ${stage.unit}`);
         parts.push(`Started ${new Date(stage.startedAt).toLocaleTimeString()}`,

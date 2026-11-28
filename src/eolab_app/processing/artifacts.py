@@ -4,6 +4,7 @@ import json
 import hashlib
 import os
 from pathlib import Path
+from datetime import datetime, timezone
 import re
 import shutil
 import stat
@@ -23,7 +24,7 @@ from eolab_app.processing.artifact_manifest import (
 )
 
 from eolab_app.processing.models import ProcessingError
-
+from eolab_app.processing.stage_progress import stage_snapshot, stage_start
 
 def write_progress(
     directory: Path,
@@ -84,6 +85,64 @@ def write_progress_snapshot(destination: Path, snapshot: dict[str, Any]) -> None
                 raise
             time.sleep(delay)
     temporary.replace(destination)
+
+
+class NativeStageProgress:
+    """Write bounded, cumulative stage records for one sequential native calculation."""
+
+    def __init__(self, directory: Path) -> None:
+        """Bind the writer to its confined attempt directory.
+
+        Args:
+            directory: Existing private attempt workspace.
+        """
+        self.directory = directory
+        self.stages: list[dict[str, Any]] = []
+        self.last_write = 0.0
+
+    def report(
+        self,
+        phase: str,
+        completed: int | None = None,
+        total: int | None = None,
+        unit: str | None = None,
+    ) -> None:
+        """Record a transition or work measurement, coalescing intermediate disk writes.
+
+        Times are recorded at the callback, including the final block in a short stage.
+        Repeated counts leave the last work timestamp unchanged.
+
+        Args:
+            phase: Identifier from the native operation.
+            completed: Units actually finished, when measured.
+            total: Total units in this stage when known.
+            unit: User-readable unit for these counts.
+
+        Raises:
+            OSError: If a complete progress snapshot cannot be written.
+        """
+        changed = not self.stages or self.stages[-1]["phase"] != phase
+        if changed:
+            stage = stage_start(phase)
+            if self.stages:
+                self.stages[-1]["endedAt"] = stage["startedAt"]
+            self.stages.append(stage)
+        else:
+            stage = self.stages[-1]
+            if (stage.get("completed"), stage.get("total")) == (completed, total):
+                return
+        if completed is not None:
+            if completed and completed != stage.get("completed"):
+                stage["lastProgressAt"] = datetime.now(timezone.utc).isoformat(
+                    timespec="microseconds"
+                )
+            stage.update(completed=completed, total=total, unit=unit)
+        now = time.monotonic()
+        if changed or completed == total or now - self.last_write >= 0.5:
+            write_progress_snapshot(
+                self.directory / "stage-progress.json", stage_snapshot(self.stages)
+            )
+            self.last_write = now
 
 
 class LocalJobArtifacts:
