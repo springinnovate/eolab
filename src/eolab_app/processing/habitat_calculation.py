@@ -42,6 +42,7 @@ from eolab_app.processing.habitat_earth_engine import (
     load_habitat_stack,
     prepare_habitat_band_views,
 )
+from eolab_app.processing.habitat_raster_cache import prepare_manual_habitat_bands
 from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_preparation import (
@@ -64,11 +65,14 @@ class HabitatSources:
         cache_directory: Private prepared-input cache for the original model
             stack, supplied only for cached-input execution. No connection or
             credentials are needed to read completed tiles.
+        band_cache_directories: Private cache namespaces for selected, authorized manual
+            data bands. Reference and assessment masks are specific to each run.
     """
 
     rasters: dict[str, Path]
     vectors: dict[str, ResolvedCatalogSelection]
     cache_directory: Path | None = None
+    band_cache_directories: dict[str, Path] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -349,6 +353,7 @@ def calculate_habitat(
                     tiles,
                     directory,
                     predictor_names + response_names,
+                    grid=grid,
                     on_tile=lambda count: progress.report(
                         "opening_habitat_inputs", count, len(tiles.tiles), "tiles"
                     ),
@@ -362,34 +367,56 @@ def calculate_habitat(
                 ),
                 None,
             )
+            band_paths = {}
             for role, names in (
                 ("predictor", predictor_names),
                 ("response", response_names),
             ):
-                inputs.update(
-                    {
-                        f"{role}_{index}": (views[name], Resampling.nearest)
-                        for index, name in enumerate(names)
-                    }
-                )
+                for index, name in enumerate(names):
+                    key = f"{role}_{index}"
+                    band_paths[key] = views[name]
+                    inputs[key] = (views[name], Resampling.nearest)
         else:
             stack = cast(HabitatRasterStack, request.stack)
             predictor_names = tuple(layer.name for layer in stack.predictors)
             response_names = tuple(layer.name for layer in stack.responses)
             categorical_predictor = stack.categoricalPredictor
-        rasters = resources.enter_context(
-            prepare_raster_stack(
-                inputs,
-                grid,
-                (mapping(aoi),),
-                directory,
-                limits,
-                all_touched=False,
-                on_progress=lambda completed, total: progress.report(
-                    "preparing_rasters", completed, total, "blocks"
-                ),
+            band_paths = resources.enter_context(
+                prepare_manual_habitat_bands(
+                    {
+                        name: entry
+                        for name, entry in inputs.items()
+                        if name.startswith(("predictor_", "response_"))
+                    },
+                    sources.band_cache_directories,
+                    grid,
+                    settings.output_grid.origin,
+                    directory,
+                    on_band=lambda completed, total: progress.report(
+                        "opening_habitat_inputs", completed, total, "rasters"
+                    ),
+                )
             )
-        )
+        mask_inputs = {
+            name: entry for name, entry in inputs.items() if name not in band_paths
+        }
+        rasters = dict(band_paths)
+        if mask_inputs:
+            rasters.update(
+                resources.enter_context(
+                    prepare_raster_stack(
+                        mask_inputs,
+                        grid,
+                        (mapping(aoi),),
+                        directory,
+                        limits,
+                        all_touched=False,
+                        on_progress=lambda completed, total: progress.report(
+                            "preparing_rasters", completed, total, "blocks"
+                        ),
+                    )
+                )
+            )
         progress.report("preparing_habitat_references")
         dataset = resources.enter_context(rasterio.open(rasters["predictor_0"]))
         if request.references.kind == "raster":

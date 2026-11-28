@@ -483,6 +483,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         native=native,
         areas=SimpleNamespace(resolve_for_sampling=resolve_selection),
         upload_storage=upload_storage,
+        operation_settings={operation.id: tmp_path / "habitat-cache"},
     )
 
     async def execute() -> bool:

@@ -5,7 +5,7 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -78,6 +78,7 @@ class ProcessingWorker:
         uploads: VectorUploadStore | None = None,
         upload_storage: UploadStorage | None = None,
         operation_settings: Mapping[str, object] | None = None,
+        cleanup_operation_files: Callable[[], None] | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
 
@@ -90,6 +91,8 @@ class ProcessingWorker:
             areas: Catalog vector reader used to resolve filtered calculation areas.
             uploads: Storage for original uploaded vectors retained by accepted jobs.
             upload_storage: Read-only shared storage for uploaded raster inputs retained by jobs.
+            cleanup_operation_files: Reclaim expired operation-owned input files
+                during the ordinary serialized worker cleanup cycle.
             operation_settings: Server-only dependencies keyed by operation ID;
                 passed unchanged to the owning operation, never persisted.
         """
@@ -97,6 +100,7 @@ class ProcessingWorker:
         self.uploads = uploads
         self.upload_storage = upload_storage
         self.operation_settings = operation_settings or {}
+        self._cleanup_operation_files = cleanup_operation_files
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
@@ -730,6 +734,11 @@ class ProcessingWorker:
             await asyncio.to_thread(self.jobs.cleaned, row["id"])
         retained = await asyncio.to_thread(self.jobs.active_attempts)
         await asyncio.to_thread(self.artifacts.remove_orphans, retained, 30)
+        if self._cleanup_operation_files is not None:
+            try:
+                await asyncio.to_thread(self._cleanup_operation_files)
+            except (OSError, ProcessingError, UploadError):
+                LOGGER.warning("Expired calculation input cache cleanup will retry.")
 
 
 async def serve(

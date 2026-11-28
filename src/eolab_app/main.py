@@ -70,6 +70,7 @@ from eolab_app.catalog_selection import (
     SavedDrawingReference,
     CatalogSelection,
 )
+from eolab_app.processing.habitat_raster_cache import HabitatInputCacheCleanup
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.habitat_preparation_selections import (
@@ -1133,6 +1134,12 @@ async def run_processing_worker() -> None:
                 )
                 await asyncio.sleep(5)
         cleanup_lock = asyncio.Lock()
+        cleanup_habitat_inputs = HabitatInputCacheCleanup(
+            settings.processing_data_path / "habitat-aligned",
+            limits.calculation_cache_ttl_seconds,
+            lambda identifier: uploads.storage.is_available(identifier, "raster"),
+            lambda identifier: jobs.available_result(identifier) is not None,
+        )
         async with asyncio.TaskGroup() as workers:
             for _ in range(limits.worker_count):
                 execution_native = create_native_process(limits)
@@ -1147,6 +1154,7 @@ async def run_processing_worker() -> None:
                     areas=areas,
                     uploads=uploads,
                     upload_storage=uploads.storage,
+                    cleanup_operation_files=cleanup_habitat_inputs,
                     operation_settings={
                         "habitat.condition.v1": (
                             settings.processing_data_path / "habitat-cache"
