@@ -830,20 +830,15 @@ class PostgresJobStore:
         with self._transaction() as cursor:
             cursor.execute(
                 """
-                WITH recent AS MATERIALIZED (
-                    SELECT job_id, created_at FROM processing.job_subscribers
-                    WHERE owner=%s AND status IS NULL
-                    ORDER BY created_at DESC LIMIT 128
-                )
                 SELECT j.summary->'timingWork' AS work, j.summary->'grid' AS grid,
                        j.progress->'stages' AS stages
-                FROM recent JOIN processing.jobs j ON j.id=recent.job_id
-                WHERE j.status='ready' AND j.expires_at>now()
+                FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id
+                WHERE s.owner=%s AND s.status IS NULL AND j.status='ready' AND j.expires_at>now()
                   AND j.summary->>'operationId'=%s
                   AND j.summary->'model'->>'definitionSha256'=%s
                   AND j.spec->>'applicationBuild'=%s
                   AND j.summary ? 'timingWork' AND j.progress ? 'stages'
-                ORDER BY recent.created_at DESC LIMIT 32
+                ORDER BY s.created_at DESC LIMIT 32
                 """,
                 (owner, operation, definition_sha256, build),
             )

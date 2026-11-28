@@ -2114,6 +2114,8 @@ def test_stage_timing_history_only_reads_recent_eligible_owned_jobs(
         ("owner", build, recipe, operation, "ready", "deleted", 1),
         ("owner", build, recipe, operation, "ready", None, -1),
     )
+    # A batch of unrelated tools must not hide the owner's earlier valid observation.
+    variants += (("owner", build, recipe, "other", "ready", None, 1),) * 128
     with psycopg.connect(store.conninfo) as db:
         for i, (owner, version, digest, op, status, subscriber, ttl) in enumerate(
             variants
