@@ -136,9 +136,6 @@ class JobStore(Protocol):
         owner: str,
         checksum: str,
         document: str,
-        *,
-        media_type: str = "application/json",
-        maximum_bytes: int = 8 * 1024**2,
     ) -> str:
         """Store an owner-private JSON input and return its expiring opaque ID.
 
@@ -146,8 +143,6 @@ class JobStore(Protocol):
             owner: Browser-session hash.
             checksum: Operation-owned content identity.
             document: Validated compact JSON text to retain.
-            media_type: Producer's format, verified when a job requests retention.
-            maximum_bytes: Largest compact UTF-8 document accepted by this producer.
 
         Returns:
             Owned input identifier.

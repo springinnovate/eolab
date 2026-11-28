@@ -20,22 +20,23 @@ from eolab_app.processing.job_store import PostgresJobStore
 from app_support import mounted_geotiff_item
 from raster_fixture_support import write_source
 from raster_source_support import SOURCE
+from test_model_runs_postgres import drawing_attachment, model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import calculation_inputs, submit_calculation
 from test_polygon_summary_areas import rectangle
 
 
 def test_vector_input_accounts_for_multilingual_notes_in_utf8(
-    boundary: Any, store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
+    model_boundary: Any, store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stage editor-valid notes using the same compact UTF-8 size as the source document.
+    """Retain editor-valid notes with a model using the same compact UTF-8 size as the source document.
 
     Args:
-        boundary: Real Processing HTTP routes.
-        store: Disposable database holding the staged input.
+        model_boundary: Real Processing model routes.
+        store: Disposable database holding the job input.
         monkeypatch: Observe where the original polygons are validated.
     """
-    client = boundary[0]
+    client = model_boundary[0]
     event_loop_thread = client.portal.call(get_ident)
     validation_threads = set()
 
@@ -59,15 +60,17 @@ def test_vector_input_accounts_for_multilingual_notes_in_utf8(
             for index in range(200)
         ],
     }
-    response = client.post(
-        "/api/processing/vector-inputs", json=collection, headers=HEADERS
+    selection, attachments = drawing_attachment(collection)
+    run = model_request(
+        client, "raster-clip",
+        inputs={"raster": SOURCE, "area": {"kind": "catalogSelection", "selection": selection}},
     )
-    assert response.status_code == 200, response.text
+    submit(client, run, attachments)
     assert validation_threads and event_loop_thread not in validation_threads
     with store._transaction() as cursor:
         cursor.execute(
             "SELECT bytes, payload FROM processing.inputs WHERE id=%s",
-            (response.json()["id"],),
+            (selection["reference"]["id"],),
         )
         saved = cursor.fetchone()
     assert saved["payload"] == collection

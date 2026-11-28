@@ -289,18 +289,8 @@ def test_batch_retry_recovers_after_polygon_upload_expires(
         headers=HEADERS,
     ).json()["polygonArea"]
     item = {**request_body(polygonArea=area), "requestId": uuid4().hex}
-    vector = client.post(
-        "/api/processing/vector-inputs",
-        json={"type": "FeatureCollection", "name": "Survey", "features": []},
-        headers=HEADERS,
-    )
-    assert vector.status_code == 200, vector.text
-    wrong_type = {**item, "requestId": uuid4().hex, "polygonArea": vector.json()}
-    accepted, rejected = client.post(
-        ENDPOINT + "/batch", json={"items": [item, wrong_type]}, headers=HEADERS
-    ).json()["items"]
-    assert rejected["error"]["code"] == "input_unavailable"
-    first = accepted["job"]
+    response = client.post(ENDPOINT + "/batch", json={"items": [item]}, headers=HEADERS)
+    first = response.json()["items"][0]["job"]
     client.delete("/api/processing/polygon-areas/" + area["id"], headers=HEADERS)
     results = client.post(
         ENDPOINT + "/batch",

@@ -27,7 +27,8 @@ from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.vector_summary_models import VectorSummaryDetails
 from eolab_app.routes.processing import COOKIE
 from test_model_runs_postgres import (
-    capture_drawing,
+    drawing_input,
+    post_model_run,
     model_boundary,
     model_request,
     submit,
@@ -39,6 +40,7 @@ from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from test_polygon_summary_areas import rectangle
 from raster_source_support import SOURCE
 from test_processing_jobs import HEADERS, boundary, store
+from test_processing_calculations import ENDPOINT, request_body
 from test_processing_uploaded_vectors import UploadBoundary, upload_boundary
 from test_vector_uploads import HEADERS as UPLOAD_HEADERS, write_layer
 
@@ -232,28 +234,6 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     client.portal.call(worker.cleanup)
 
 
-def test_accepted_drawings_release_staging_capacity(model_boundary: Any) -> None:
-    """Submit more drawings than the staging quota while earlier runs still own their inputs.
-
-    Args:
-        model_boundary: Processing API with a real database and catalog raster.
-    """
-    client, _, _ = model_boundary
-    for _ in range(33):
-        selection = capture_drawing(client, rectangle(0.1, 9.1, 0.3, 9.3))
-        submit(
-            client,
-            model_request(
-                client,
-                "raster-clip",
-                inputs={
-                    "raster": SOURCE,
-                    "area": {"kind": "catalogSelection", "selection": selection},
-                },
-            ),
-        )
-
-
 def test_model_admits_a_group_without_consuming_shared_staging(
     model_boundary: Any, store: PostgresJobStore
 ) -> None:
@@ -342,6 +322,13 @@ def test_model_admits_a_group_without_consuming_shared_staging(
             ),
         )
     assert submit(client, run)["jobId"] == job_id
+    # Polygon-area calculations accept a staged boundary, but cannot use a retained feature collection as one.
+    valid = {**request_body(polygonArea=sampled.json()["polygonArea"]), "requestId": uuid4().hex}
+    invalid = {**valid, "requestId": uuid4().hex, "polygonArea": members[0]["selection"]["reference"]}
+    batch = client.post(
+        ENDPOINT + "/batch", json={"items": [valid, invalid]}, headers=HEADERS,
+    ).json()["items"]
+    assert "job" in batch[0] and batch[1]["error"]["code"] == "input_unavailable"
     with store._transaction() as cursor:
         cursor.execute(
             "SELECT count(*) AS count FROM processing.inputs WHERE expires_at IS NOT NULL"
@@ -396,7 +383,7 @@ def test_duplicate_preserves_drawing_intersection(
         ).polygons
 
     service.read_filter_drawing = read_filter
-    target = capture_drawing(client, geometry)
+    target, documents = drawing_input(geometry)
     saved_doc = json.dumps({"polygons": [geometry] * len(selected.featureIds)}).encode()
     if origin == "device":
         area = client.post(
@@ -427,18 +414,8 @@ def test_duplicate_preserves_drawing_intersection(
         },
     )
     if origin == "attachment":
-        body = b"\n".join(
-            [json.dumps(request).encode(), json.dumps([area["id"]]).encode(), saved_doc]
-        )
-        reply = client.post(
-            "/api/processing/model-runs/with-inputs",
-            content=body,
-            headers={**HEADERS, "Content-Type": "application/x-ndjson"},
-        )
-        assert reply.status_code == 202, reply.text
-        job = reply.json()
-    else:
-        job = submit(client, request)
+        documents[area["id"]] = saved_doc
+    job = submit(client, request, documents)
     url = "/api/processing/jobs/" + job["jobId"]
     saved = client.get(url + "/invocation").json()["inputs"]
     captured = saved["area"]["selection"]["filter"]["rules"][0]["source"]["polygonArea"]
@@ -505,7 +482,7 @@ def test_overlapping_retry_returns_job_accepted_before_source_error(model_bounda
     """
     client, worker, service = model_boundary
     geometry = rectangle(0.1, 9.1, 0.3, 9.3)
-    target = capture_drawing(client, geometry)
+    target, documents = drawing_input(geometry)
     target["filter"] = {"rules": [{"operator": "intersects", "layerId": str(uuid4()),
         "source": {"kind": "drawing", "polygonArea": {
             "drawingLayerId": str(uuid4()), "revision": 1, "featureIds": ["site"]}}}]}
@@ -523,10 +500,10 @@ def test_overlapping_retry_returns_job_accepted_before_source_error(model_bounda
 
     service.read_filter_drawing = read_revision
     with ThreadPoolExecutor(1) as pool:
-        delayed = pool.submit(client.post, "/api/processing/model-runs", json=request, headers=HEADERS)
+        delayed = pool.submit(post_model_run, client, request, documents)
         try:
             assert reading.wait(10)
-            accepted = submit(client, request)
+            accepted = submit(client, request, documents)
         finally:
             committed.set()
         reply = delayed.result(10)
@@ -559,7 +536,7 @@ def test_clip_pixels_match_for_all_four_vector_sources(
             [[0.121, 9.173], [0.433, 9.173], [0.121, 9.427], [0.121, 9.173]]
         ],
     }
-    drawing = capture_drawing(client, geometry)
+    drawing, documents = drawing_input(geometry)
     original = tmp_path / "sites.gpkg"
     with fiona.open(
         original,
@@ -630,7 +607,7 @@ def test_clip_pixels_match_for_all_four_vector_sources(
                 "area": {"kind": "catalogSelection", "selection": source},
             },
         )
-        runs.append(submit(client, body))
+        runs.append(submit(client, body, documents if source is drawing else None))
     with TestClient(client.app, base_url="https://testserver") as stranger:
         assert (
             stranger.post(
@@ -638,13 +615,7 @@ def test_clip_pixels_match_for_all_four_vector_sources(
             ).status_code
             == 409
         )
-    assert (
-        client.delete(
-            "/api/processing/vector-inputs/" + drawing["reference"]["id"],
-            headers=HEADERS,
-        ).status_code
-        == 200
-    )
+
     assert (
         client.delete(
             f"/api/vector-uploads/{upload['uploadId']}", headers=UPLOAD_HEADERS

@@ -17,13 +17,11 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
-from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
 from starlette.responses import FileResponse, StreamingResponse
 
 from eolab_app.processing.models import (
-    MAX_STAGED_INPUT_BYTES,
     ArtifactDownload,
     JobListResponse,
     JobStatusRequest,
@@ -40,9 +38,7 @@ from eolab_app.processing.aggregate_models import (
     MAX_CALCULATION_BATCH_BYTES,
     MAX_CALCULATION_ITEM_BYTES,
 )
-from eolab_app.drawings.models import DrawingFeatureCollection
 from eolab_app.polygon_areas import (
-    ProcessingInputReference,
     MAX_POLYGON_AREA_BYTES,
     PolygonSummaryInput,
     PolygonAreaUploadResponse,
@@ -120,7 +116,6 @@ class RequestSizeLimitedRoute(APIRoute):
                 return await handler(request)
             limit = {
                 "/api/processing/polygon-areas": MAX_POLYGON_AREA_BYTES,
-                "/api/processing/vector-inputs": MAX_STAGED_INPUT_BYTES,
                 "/api/processing/raster-calculations/batch": MAX_CALCULATION_BATCH_BYTES,
             }.get(request.url.path, 16 * 1024)
             body = bytearray()
@@ -689,49 +684,6 @@ def create_processing_router(
         """
         return await _download_saved_yaml(job_id, "run-yaml", request, response)
 
-    @router.post(
-        "/vector-inputs",
-        response_model=ProcessingInputReference,
-        openapi_extra={
-            **MUTATION_SCHEMA,
-            "requestBody": {
-                "required": True,
-                "content": {"application/json": {"schema": {
-                    "$id": "urn:eolab:processing:drawing-input",
-                    **DrawingFeatureCollection.model_json_schema(),
-                }}},
-            },
-        },
-    )
-    async def capture_vector_input(
-        request: Request, response: Response
-    ) -> ProcessingInputReference:
-        """Save committed drawing features for this browser's model submissions.
-
-        Args:
-            request: Size-checked editor GeoJSON and the browser's Processing session.
-            response: Response receiving the session cookie and private-cache headers.
-
-        Returns:
-            Expiring private reference covering the complete feature collection.
-
-        Raises:
-            HTTPException: If session, origin, input size or storage checks fail.
-        """
-        owner = get_processing_session_owner_hash(
-            request, response, session_ttl_seconds
-        )
-        try:
-            return await _await_service_result(
-                asyncio.to_thread(service.capture_vector_input, owner, await request.body())
-            )
-        except ValidationError as error:
-            raise RequestValidationError([
-                {**entry, "loc": ("body", *entry["loc"])}
-                for entry in error.errors(include_input=False, include_context=False, include_url=False)
-            ]) from error
-
-    @router.delete("/vector-inputs/{area_id}", openapi_extra=MUTATION_SCHEMA)
     @router.delete("/polygon-areas/{area_id}", openapi_extra=MUTATION_SCHEMA)
     async def discard_polygon_area(
         area_id: JobId, request: Request, response: Response

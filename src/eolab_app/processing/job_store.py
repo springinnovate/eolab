@@ -249,9 +249,6 @@ class PostgresJobStore:
         owner: str,
         checksum: str,
         document: str,
-        *,
-        media_type: str = "application/json",
-        maximum_bytes: int = 8 * 1024**2,
     ) -> str:
         """Stage a private input for one day. A job can take ownership at admission.
 
@@ -259,8 +256,6 @@ class PostgresJobStore:
             owner: Current Processing browser-session hash.
             checksum: Operation-owned content identity.
             document: Validated compact JSON without filesystem paths or credentials.
-            media_type: Format established by its producer for checked admission.
-            maximum_bytes: Largest compact UTF-8 document accepted by this producer.
 
         Returns:
             Opaque identifier usable only by the same owner.
@@ -269,10 +264,10 @@ class PostgresJobStore:
             ProcessingError: If the input or shared storage capacity is exceeded.
         """
         size = len(document.encode("utf-8"))
-        if size > maximum_bytes:
+        if size > 8 * 1024**2:
             raise ProcessingError(
                 "input_size",
-                f"This processing input exceeds the {maximum_bytes:,}-byte storage limit.",
+                "This processing input exceeds the 8 MiB storage limit.",
                 413,
             )
         with self._transaction(acquire_lock=True) as cursor:
@@ -297,8 +292,8 @@ class PostgresJobStore:
                 )
             identifier = uuid4().hex
             cursor.execute(
-                "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at,media_type) VALUES (%s,%s,%s,%s::jsonb,%s,now()+interval '1 day',%s)",
-                (identifier, owner, checksum, document, size, media_type),
+                "INSERT INTO processing.inputs(id,owner,sha256,payload,bytes,expires_at) VALUES (%s,%s,%s,%s::jsonb,%s,now()+interval '1 day')",
+                (identifier, owner, checksum, document, size),
             )
             return identifier
 
@@ -607,7 +602,6 @@ class PostgresJobStore:
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
         private_inputs: list[tuple[str, str]] = []
-        consumed_staging = set()
         documents = {
             document.reference: document.content
             for item in submissions
@@ -712,11 +706,6 @@ class PostgresJobStore:
                         (job_id, reference.id)
                         for reference in expected.input_references
                     )
-                    consumed_staging.update(
-                        ref.id
-                        for ref in expected.input_references
-                        if ref.consume_staging
-                    )
                     retained_seconds = (
                         max(
                             expected.minimum_retention_seconds,
@@ -801,11 +790,6 @@ class PostgresJobStore:
                     cursor.executemany(
                         "INSERT INTO processing.job_inputs(job_id,input_id) VALUES (%s,%s)",
                         private_inputs,
-                    )
-                if consumed_staging:
-                    cursor.execute(
-                        "UPDATE processing.inputs SET expires_at=NULL WHERE id=ANY(%s) AND expires_at IS NOT NULL",
-                        (list(consumed_staging),),
                     )
                 unused = {ref.id for ref in inserted} - {
                     input_id for _, input_id in private_inputs

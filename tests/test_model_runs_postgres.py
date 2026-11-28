@@ -6,6 +6,9 @@ from threading import Barrier
 from datetime import datetime, timedelta, timezone
 import asyncio
 import hashlib
+import json
+
+import httpx2
 import numpy
 import rasterio
 from rasterio.features import geometry_mask
@@ -151,12 +154,12 @@ def test_undo_restores_terminal_run_history(
         state: Terminal outcome to restore, including subscriber cancellation.
     """
     client, worker, _ = model_boundary
-    drawing = capture_drawing(client, rectangle(0.1, 9.1, 0.3, 9.3))
+    drawing, documents = drawing_input(rectangle(0.1, 9.1, 0.3, 9.3))
     body = model_request(
         client, "raster-clip",
         inputs={"raster": SOURCE, "area": {"kind": "catalogSelection", "selection": drawing}},
     )
-    run = submit(client, body)
+    run = submit(client, body, documents)
     base = f"/api/processing/jobs/{run['jobId']}"
     if state == "cancelled":
         assert client.post(base + "/cancel", headers=HEADERS).status_code == 202
@@ -655,11 +658,10 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "artifactId": file["artifactId"],
         }
     mask = request.starting_mask.model_dump(mode="json", by_alias=True)
+    documents = {}
     if change_source == "drawn_mask":
-        mask = {
-            "kind": "catalogSelection",
-            "selection": capture_drawing(client, rectangle(0.1, 0.1, 0.9, 3.9)),
-        }
+        selection, documents = drawing_input(rectangle(0.1, 0.1, 0.9, 3.9))
+        mask = {"kind": "catalogSelection", "selection": selection}
     body = model_request(
         client,
         "downstream-beneficiaries",
@@ -673,7 +675,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "travel_time_pixel_size_m": 100000,
         },
     )
-    job = submit(client, body)
+    job = submit(client, body, documents)
     identifier = job["jobId"]
     pending = parse_yaml(
         client.get(f"/api/processing/jobs/{identifier}/run-yaml").content, run=True
@@ -796,17 +798,44 @@ def model_request(
     }
 
 
-def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
+def post_model_run(
+    client: TestClient, body: dict[str, Any], documents: dict[str, bytes] | None = None
+) -> httpx2.Response:
+    """Post a compact invocation and any original drawing documents to the model API.
+
+    Args:
+        client: Browser session submitting the run.
+        body: Invocation with opaque source references.
+        documents: Newly captured source bytes keyed by their input IDs.
+
+    Returns:
+        The actual admission response, including any input or ownership error.
+    """
+    if not documents:
+        return client.post("/api/processing/model-runs", json=body, headers=HEADERS)
+    payload = b"\n".join(
+        [json.dumps(body).encode(), json.dumps(list(documents)).encode(), *documents.values()]
+    )
+    return client.post(
+        "/api/processing/model-runs/with-inputs", content=payload,
+        headers={**HEADERS, "Content-Type": "application/x-ndjson"},
+    )
+
+
+def submit(
+    client: TestClient, body: dict[str, Any], documents: dict[str, bytes] | None = None
+) -> dict[str, Any]:
     """Submit through the actual same-origin HTTP boundary.
 
     Args:
         client: Authorized browser-session client.
         body: Model submission.
+        documents: Fresh drawing inputs to send with this invocation.
 
     Returns:
         Accepted Processing job response.
     """
-    response = client.post("/api/processing/model-runs", json=body, headers=HEADERS)
+    response = post_model_run(client, body, documents)
     assert response.status_code == 202, response.text
     job = response.json()
     assert response.headers["location"] == f"/api/processing/jobs/{job['jobId']}"
@@ -894,23 +923,21 @@ def test_model_worker_rejects_changed_routing_dependencies(
         model_runs.compute_implementation_checksum.cache_clear()
 
 
-def capture_drawing(
-    client: TestClient,
+def drawing_input(
     geometry: dict[str, Any],
     *,
     excluded: int = 1,
     note: str = "omit",
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, bytes]]:
     """Capture a drawing and select the requested geometry by its note.
 
     Args:
-        client: Browser owning the temporary input and subsequent calculation.
         geometry: WGS84 polygon that should be used in the calculation.
         excluded: Number of additional features excluded by the filter.
         note: Text retained on each excluded feature.
 
     Returns:
-        Path-free selection with its attribute predicate.
+        The selection and the original features to attach when submitting it.
     """
     collection = {
         "type": "FeatureCollection",
@@ -933,20 +960,32 @@ def capture_drawing(
             for index in range(excluded)
         ],
     }
-    response = client.post(
-        "/api/processing/vector-inputs", json=collection, headers=HEADERS
-    )
-    assert response.status_code == 200, response.text
-    return {
-        "kind": "capturedVector",
-        "reference": response.json(),
-        "layerName": "features",
-        "filter": {
-            "enabled": True,
-            "match": "all",
-            "rules": [{"field": "note", "operator": "eq", "value": "include"}],
-        },
+    selection, documents = drawing_attachment(collection)
+    selection["filter"] = {
+        "enabled": True, "match": "all",
+        "rules": [{"field": "note", "operator": "eq", "value": "include"}],
     }
+    return selection, documents
+
+
+def drawing_attachment(collection: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """Bind an editor collection to the checksum of its actual transmitted bytes.
+
+    Args:
+        collection: Original features to send in the model request.
+
+    Returns:
+        The whole-layer selection and its attachment keyed by the private input ID.
+    """
+    document = json.dumps(collection, ensure_ascii=False, separators=(",", ":")).encode()
+    key = uuid4().hex
+    selection = {
+        "kind": "capturedVector",
+        "reference": {"id": key, "sha256": hashlib.sha256(document).hexdigest()},
+        "layerName": "features",
+        "filter": {},
+    }
+    return selection, {key: document}
 
 
 @pytest.mark.parametrize("source_origin", ["catalog", "drawing", "collaborative"])
@@ -975,14 +1014,15 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
         geometry=rectangle(x - radius, y - radius, x + radius, y + radius),
     )
     selection = register_selection(vector_client, path)
+    documents = {}
     if source_origin != "catalog":
         geometry = rasterio.warp.transform_geom(
             crs, "EPSG:4326", rectangle(x - radius, y - radius, x + radius, y + radius)
         )
-        selection = (
-            capture_drawing(client, geometry, excluded=500, note="é" * 9000)
+        selection, documents = (
+            drawing_input(geometry, excluded=500, note="é" * 9000)
             if source_origin == "collaborative"
-            else capture_drawing(client, geometry)
+            else drawing_input(geometry)
         )
     body = model_request(
         client,
@@ -1007,15 +1047,7 @@ def test_polygon_flow_area_publishes_the_selected_direction_as_a_geotiff(
     )
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_model_inputs"
-    run = submit(client, body)
-    if source_origin != "catalog":
-        assert (
-            client.delete(
-                "/api/processing/vector-inputs/" + selection["reference"]["id"],
-                headers=HEADERS,
-            ).status_code
-            == 200
-        )
+    run = submit(client, body, documents)
     assert client.portal.call(worker.run_once)
     identifier = run["jobId"]
     base = f"/api/processing/jobs/{identifier}"
@@ -1757,10 +1789,11 @@ def test_model_vector_filter_preserves_catalog_selection(
         ],
     }
     area = {"kind": "catalogSelection", "selection": selection}
+    documents = {}
     if second_source:
         east = rectangle(0.35, 9.35, 0.9, 9.9)
         if second_source == "drawing":
-            east_selection = capture_drawing(client, east)
+            east_selection, documents = drawing_input(east)
         else:
             path = tmp_path / "east.gpkg"
             write_geopackage_layer(path, "mask", crs="EPSG:4326", geometry=east)
@@ -1781,7 +1814,7 @@ def test_model_vector_filter_preserves_catalog_selection(
             "area": area,
         },
     )
-    job = submit(client, body)
+    job = submit(client, body, documents)
     assert client.portal.call(worker.run_once)
     status = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert status["status"] == "ready", status

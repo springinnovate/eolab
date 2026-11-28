@@ -25,7 +25,7 @@ def private_vector_input(
         selection: A model vector or a polygon view referenced by its predicate.
 
     Returns:
-        An input ID with its checksum, document format and staging lifetime,
+        An input ID with its checksum and document format,
         or None when another source authority supplies this selection.
     """
     if isinstance(selection, CapturedVectorSelection):
@@ -39,7 +39,6 @@ def private_vector_input(
             selection.polygonArea.id,
             selection.polygonArea.sha256,
             "application/json",
-            consume_staging=False,
         )
     return None
 

@@ -10,7 +10,6 @@ from pathlib import PurePath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from pydantic import TypeAdapter
-from eolab_app.drawings.models import DrawingFeatureCollection
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
 from eolab_app.processing.shared_calculations import (
@@ -18,7 +17,6 @@ from eolab_app.processing.shared_calculations import (
 )
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
-    MAX_STAGED_INPUT_BYTES,
     ArtifactDownload,
     JobInputDocument,
     JobInputFile,
@@ -42,7 +40,6 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.polygon_areas import (
     PolygonAreaReference,
-    ProcessingInputReference,
     PolygonSummaryInput,
     SummaryPolygon,
     read_polygon_area_input,
@@ -1569,33 +1566,6 @@ class ProcessingService:
                 503,
             )
         return self.changes.subscribe(owner)
-
-    def capture_vector_input(
-        self, owner: str, body: bytes
-    ) -> ProcessingInputReference:
-        """Validate and store a browser's drawing on the input-processing thread.
-
-        Args:
-            owner: Server-derived Processing session identity.
-            body: Size-checked GeoJSON containing IDs, attributes, order and geometry.
-
-        Returns:
-            Opaque input reference with a checksum over the whole collection.
-
-        Raises:
-            ProcessingError: If temporary input storage is full or unavailable.
-            ValueError: If the input is invalid GeoJSON for a drawing.
-        """
-        document = DrawingFeatureCollection.normalize_document(body)
-        checksum = hashlib.sha256(document.encode("utf-8")).hexdigest()
-        identifier = self.jobs.save_input(
-            owner,
-            checksum,
-            document,
-            media_type="application/geo+json",
-            maximum_bytes=MAX_STAGED_INPUT_BYTES,
-        )
-        return ProcessingInputReference(id=identifier, sha256=checksum)
 
     async def upload_polygon_area(
         self, owner: str, polygons: PolygonSummaryInput

@@ -38,7 +38,7 @@ from eolab_app.routes.processing import COOKIE
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference
-from test_model_runs_postgres import capture_drawing, model_boundary, model_request, submit
+from test_model_runs_postgres import drawing_input, model_boundary, model_request, submit
 from test_model_artifacts_postgres import multiple_boundary
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from raster_source_support import SOURCE
@@ -750,13 +750,15 @@ def test_worker_recovers_unanswered_claim_with_retained_input(
     client, worker, _ = model_boundary
     parent, source, path = publish_input(model_boundary)
     area = {"kind": "wholeRaster"}
+    documents = {}
     if outcome == "drawing":
         from test_polygon_summary_areas import rectangle
 
-        area = {"kind": "catalogSelection", "selection": capture_drawing(client, rectangle(-40, -40, 40, 40))}
+        selection, documents = drawing_input(rectangle(-40, -40, 40, 40))
+        area = {"kind": "catalogSelection", "selection": selection}
     child = submit(
         client,
-        model_request(client, inputs={"raster": source, "area": area}),
+        model_request(client, inputs={"raster": source, "area": area}), documents,
     )
     child_url = f"/api/processing/jobs/{child['jobId']}"
     assert (
