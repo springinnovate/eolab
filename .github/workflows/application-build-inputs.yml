@@ -161,10 +161,15 @@ jobs:
           export EOLAB_VECTOR_UPLOAD_DATA_VOLUME_NAME="$COMPOSE_PROJECT_NAME-uploads" EOLAB_HABITAT_CREDENTIALS_VOLUME_NAME="$COMPOSE_PROJECT_NAME-habitat"
           export EOLAB_GEOSERVER_DATA_VOLUME_NAME="$COMPOSE_PROJECT_NAME-geoserver"
           trap '"${compose[@]}" logs --tail 100 jobs processing-worker app; "${compose[@]}" down -v' EXIT
-          "${compose[@]}" up --no-build --no-deps -d --wait --wait-timeout 180 database processing-worker app jobs
+          "${compose[@]}" up --no-build --no-deps -d database processing-worker app jobs
           # Activation proves the restricted supervisor reached the migrated scheduler.
-          for attempt in {1..30}; do
-            if "${compose[@]}" exec -T database psql -Atc "select count(*) from processing.executor_sessions" | grep -qx 1; then break; fi
+          activation_deadline=$((SECONDS + 180))
+          until "${compose[@]}" exec -T database psql -Atc \
+            "SELECT EXISTS (SELECT FROM processing.executor_sessions WHERE scope='jobs')" 2>/dev/null | grep -qx t; do
+            if (( SECONDS >= activation_deadline )); then
+              echo "The Jobs supervisor did not register with the shared scheduler within 180 seconds." >&2
+              exit 1
+            fi
             sleep 1
           done
           "${compose[@]}" exec -T jobs python -c "from urllib.request import urlopen; print(urlopen('http://127.0.0.1:8080/api/jobs/openapi.json').read().decode())" > artifacts/application-builds/jobs-openapi.json
