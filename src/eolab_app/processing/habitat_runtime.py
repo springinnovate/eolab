@@ -128,7 +128,7 @@ def _remaining_seconds(
     occupied: int,
     observed: dict[str, dict[str, Any]],
     now: datetime,
-) -> tuple[float, bool]:
+) -> tuple[float, float, bool]:
     """Project one historical timeline onto the current inputs and observed work.
 
     Args:
@@ -140,8 +140,8 @@ def _remaining_seconds(
         now: Status snapshot time for elapsed work in the active stage.
 
     Returns:
-        Remaining seconds through verified publication, and whether the active
-        stage has exceeded this sample's range without a new work observation.
+        Earliest and latest projected seconds through verified publication, and
+        whether the active stage has outlasted this sample without new work.
     """
     old = sample["work"]
     previous = sample["stages"]
@@ -155,6 +155,7 @@ def _remaining_seconds(
     )
     old_occupied = _covered_cells(old, sample["cells"])
     remaining = 0.0
+    unobserved_seconds = 0.0
     overdue = False
     for phase, historical in previous.items():
         stage = observed.get(phase)
@@ -192,9 +193,14 @@ def _remaining_seconds(
             # Never turn a lease renewal into a unit of completed work. A stalled
             # stage can outlive the analogs; suppress its stale range in that case.
             overdue = elapsed > max(seconds * 1.5, measured + 2)
-            seconds = max(0.0, seconds - elapsed)
+            elapsed_remaining = max(0.0, seconds - elapsed)
+            if total and done is not None and done < total:
+                # The upper bound takes credit through the latest measured unit.
+                # A late poll alone cannot confirm that another window finished.
+                unobserved_seconds = max(0.0, seconds - measured) - elapsed_remaining
+            seconds = elapsed_remaining
         remaining += seconds
-    return remaining, overdue
+    return remaining, remaining + unobserved_seconds, overdue
 
 
 def estimate_habitat_completion(
@@ -251,22 +257,21 @@ def estimate_habitat_completion(
         if any(ratio < 0.25 or ratio > 4 for ratio in ratios):
             continue
         proximity = distance + 0.5 * (current_repeat != repeat) + 0.25 * (not same_area)
-        remaining, overdue = _remaining_seconds(
+        lower, upper, overdue = _remaining_seconds(
             sample, work, target_cells, target_occupied, observed, now
         )
-        comparable.append((proximity, remaining, overdue))
+        comparable.append((proximity, lower, upper, overdue))
     if len(comparable) < 3:
         return unsure
     # Use the nearest workload cohort. Bounded samples make status reads independent
     # of the total retained job count. Preserve spread across warm and cold storage.
     comparable.sort(key=lambda item: item[0])
     near = [row for row in comparable[:12] if row[0] <= comparable[2][0] + 0.25]
-    if all(row[2] for row in near):
+    upper = max(row[2] for row in near)
+    if all(row[3] for row in near) or upper <= 0:
         return unsure
-    seconds = sorted(row[1] for row in near)
-    if seconds[-1] <= 0:
-        return unsure
+    lower = min(row[1] for row in near)
     return {
-        "lowerSeconds": max(0, floor(seconds[0] * 0.8)),
-        "upperSeconds": max(1, ceil(seconds[-1] * 1.25)),
+        "lowerSeconds": max(0, floor(lower * 0.8)),
+        "upperSeconds": max(1, ceil(upper * 1.25)),
     }

@@ -128,6 +128,8 @@ def test_sparse_history_queue_and_stalled_publication() -> None:
     stages[-1].update(endedAt=None, completed=0, total=1)
     soon = estimate_habitat_completion(summary, stages, now + timedelta(seconds=2))
     assert soon["lowerSeconds"] <= 6 <= soon["upperSeconds"]
+    first = estimate_habitat_completion(summary, stages, now)
+    assert soon["upperSeconds"] == first["upperSeconds"]
     assert (
         estimate_habitat_completion(summary, stages, now + timedelta(seconds=60))
         == unknown
