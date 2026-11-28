@@ -349,13 +349,15 @@ test("Lasso reads exact attributes from a hidden source with click picking disab
 });
 
 test("renaming Lasso layers refreshes active and restored status without another read", async t => {
-  for (const count of [0, 1]) await t.test(`${count} selected`, async t => {
+  for (const count of [0, 1, 2]) await t.test(`${count} selected`, async t => {
     let reads = 0;
     const h = createFixture(async (url, options) => {
       reads++;
       const {selection} = JSON.parse(options.body);
-      const ids = selection.itemId === "other" ? ["2"] : count ? ["1"] : [];
-      return Response.json({matched: ids.length, featureIds: ids, geometry: null,
+      const ids = selection.itemId === "other" ? ["3"] : ["1", "2"].slice(0, count);
+      const geometry = ids.length === 2 ? {type: "FeatureCollection", simplified: true,
+        features: ids.map(id => ({type: "Feature", id, properties: {}, geometry: lassoPolygon}))} : null;
+      return Response.json({matched: ids.length, featureIds: ids, geometry,
         features: ids.map(id => ({id, properties: {rank: Number(id)}}))});
     });
     t.after(() => h.controller.destroy());
@@ -372,7 +374,8 @@ test("renaming Lasso layers refreshes active and restored status without another
       original.label = h.targets[0].label = label;
       h.controller.syncVisibleLayers();
       const message = `${count} feature${count === 1 ? "" : "s"} selected in ${label}.` +
-        (count ? " Map highlights are unavailable; attributes and plots are ready." : "");
+        (count === 1 ? " Map highlights are unavailable; attributes and plots are ready." : "") +
+        (count === 2 ? " Map highlights show simplified shapes or points." : "");
       assert.equal(h.displays.at(-1).label, label);
       assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent, message);
       assert.equal(h.sampleChanges.at(-1).message, message);

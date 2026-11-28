@@ -2,14 +2,19 @@
 
 import asyncio
 import json
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
+from itertools import chain
 from math import ceil
 from time import monotonic
 from typing import Literal
 
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from shapely import get_num_coordinates
+from shapely.geometry import mapping
+from shapely.geometry.base import BaseGeometry
 
 from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.bounded_vector import READ_SECONDS, VectorReadLimits, _limit_memory
@@ -50,8 +55,9 @@ class LassoSelectionResult(BaseModel):
         featureIds: Canonical decimal native IDs in numeric ascending order,
             with each feature once. Text preserves signed-64-bit identity in browsers.
         features: Original scalar attributes in that same order for inspection and plots.
-        geometry: Attribute-free whole-feature display geometry, or None when
-            it cannot fit the ordinary map read or display budget.
+        geometry: Attribute-free highlights for every match, or None when the
+            bounded map read cannot provide them. A FeatureCollection with
+            simplified=true uses less detailed shapes or points on the features.
     """
 
     matched: int = Field(ge=0)
@@ -152,57 +158,129 @@ async def deliver_lasso_features(
         delivered.raise_for_status()
 
 
+def _encode_highlight(
+    feature_id: int, geometry: BaseGeometry, coordinates_left: int, bytes_left: int
+) -> tuple[bytes, int] | None:
+    """Encode one map feature if it fits both remaining display budgets.
+
+    Args:
+        feature_id: Original native ID.
+        geometry: WGS84 shape to draw at its original location.
+        coordinates_left: Maximum number of coordinates for this shape.
+        bytes_left: Maximum encoded bytes for this GeoJSON Feature.
+
+    Returns:
+        GeoJSON bytes and coordinate count, or None if either limit is exceeded.
+    """
+    coordinates = int(get_num_coordinates(geometry))
+    if coordinates > coordinates_left:
+        return None
+    feature = {
+        "type": "Feature",
+        "id": feature_id,
+        "properties": {},
+        "geometry": mapping(geometry),
+    }
+    encoded = json.dumps(feature, allow_nan=False, separators=(",", ":")).encode()
+    return (encoded, coordinates) if len(encoded) <= bytes_left else None
+
+
+def _highlight_shapes(geometry: BaseGeometry) -> Iterator[BaseGeometry]:
+    """Offer progressively coarser map shapes, ending with a point on the feature.
+
+    Args:
+        geometry: Selected original in WGS84.
+
+    Yields:
+        Original geometry, then topology-preserving approximations from fine
+        to coarse relative to the feature's extent. The last choice locates a
+        feature whose disconnected parts cannot fit even at coarse resolution.
+    """
+    yield geometry
+    west, south, east, north = geometry.bounds
+    span = max(east - west, north - south)
+    for divisor in (4096, 512, 64, 8, 1):
+        yield geometry.simplify(span / divisor, preserve_topology=True)
+    yield geometry.representative_point()
+
+
 def encode_lasso_highlights(
     target: ResolvedCatalogSelection,
     feature_ids: tuple[int, ...],
     limits: VectorReadLimits,
 ) -> bytes | None:
-    """Encode complete whole-feature highlights once inside the supervised worker.
+    """Return map highlights for every match from a single supervised source read.
 
     Args:
-        target: Authorized immutable vector and its applied predicate.
-        feature_ids: Exact native IDs to display, without clipping their geometries.
+        target: Authorized immutable vector with its applied predicate.
+        feature_ids: Exact native IDs to display in the supplied order.
         limits: Existing interactive source-read budgets.
 
     Returns:
-        Encoded WGS84 GeoJSON, or None when the display/read budget is exceeded.
+        WGS84 GeoJSON with original shapes if they all fit. Otherwise each
+        feature receives a share of the display budget for a reduced shape or
+        location marker. Its GeoJSON collection has a boolean "simplified"
+        member set to true. Returns None if the complete display cannot fit.
 
     Raises:
         SelectionUnavailableError: If the original file cannot be read.
     """
-    from shapely import get_num_coordinates
-    from shapely.geometry import mapping
-
+    prefix = b'{"type":"FeatureCollection","features":['
+    suffix = b"]}"
     if not feature_ids:
-        return b'{"type":"FeatureCollection","features":[]}'
-    features: list[bytes] = []
-    coordinates = 0
-    size = 64
+        return prefix + suffix
+    deadline = monotonic() + limits.seconds
     try:
-        with _limit_memory(limits.memory_bytes):
-            with closing(
+        with (
+            _limit_memory(limits.memory_bytes),
+            closing(
                 iter_original_features(
-                    target,
-                    limits,
-                    monotonic() + limits.seconds,
-                    feature_ids=feature_ids,
+                    target, limits, deadline, feature_ids=feature_ids
                 )
-            ) as originals:
-                for feature_id, _properties, geometry in originals:
-                    coordinates += int(get_num_coordinates(geometry))
-                    if coordinates > MAX_DISPLAY_COORDINATES:
+            ) as originals,
+        ):
+            shapes = ((fid, geometry) for fid, _, geometry in originals)
+            buffered_shapes: list[tuple[int, BaseGeometry]] = []
+            encoded: list[bytes] = []
+            coordinates_left = MAX_DISPLAY_COORDINATES
+            bytes_left = (
+                MAX_DISPLAY_BYTES - len(prefix + suffix) - (len(feature_ids) - 1)
+            )
+            for fid, geometry in shapes:
+                buffered_shapes.append((fid, geometry))
+                exact = _encode_highlight(fid, geometry, coordinates_left, bytes_left)
+                if exact is None:
+                    break
+                data, coordinates = exact
+                encoded.append(data)
+                coordinates_left -= coordinates
+                bytes_left -= len(data)
+            else:
+                return prefix + b",".join(encoded) + suffix
+
+            # Reuse the small exact prefix and continue the open reader from
+            # the first overflow. No feature is fetched or projected twice.
+            prefix = b'{"type":"FeatureCollection","simplified":true,"features":['
+            count = len(feature_ids)
+            byte_share = (
+                MAX_DISPLAY_BYTES - len(prefix + suffix) - (count - 1)
+            ) // count
+            coordinate_share = MAX_DISPLAY_COORDINATES // count
+            encoded.clear()
+            if coordinate_share == 0 or byte_share <= 0:
+                return None
+            for fid, geometry in chain(buffered_shapes, shapes):
+                for candidate in _highlight_shapes(geometry):
+                    if monotonic() >= deadline:
                         return None
-                    feature = {
-                        "type": "Feature",
-                        "id": feature_id,
-                        "properties": {},
-                        "geometry": mapping(geometry),
-                    }
-                    encoded = json.dumps(feature, allow_nan=False).encode()
-                    size += len(encoded) + 1
-                    if size > MAX_DISPLAY_BYTES:
-                        return None
-                    features.append(encoded)
-        return b'{"type":"FeatureCollection","features":[' + b",".join(features) + b"]}"
+                    reduced = _encode_highlight(
+                        fid, candidate, coordinate_share, byte_share
+                    )
+                    if reduced is not None:
+                        encoded.append(reduced[0])
+                        break
+                else:
+                    return None
+            return prefix + b",".join(encoded) + suffix
     except (GeometryValidationError, MemoryError):
         return None
