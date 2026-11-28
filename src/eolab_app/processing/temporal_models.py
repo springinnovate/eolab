@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import Artifact
 from eolab_app.processing.temporal_coverage import OptionalObservationLabels
@@ -96,7 +96,7 @@ class TemporalMapRequest(BaseModel):
     precipitation: PrecipitationConversion
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
 

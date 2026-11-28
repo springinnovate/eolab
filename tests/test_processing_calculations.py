@@ -289,9 +289,8 @@ def test_batch_retry_recovers_after_polygon_upload_expires(
         headers=HEADERS,
     ).json()["polygonArea"]
     item = {**request_body(polygonArea=area), "requestId": uuid4().hex}
-    first = client.post(
-        ENDPOINT + "/batch", json={"items": [item]}, headers=HEADERS
-    ).json()["items"][0]["job"]
+    response = client.post(ENDPOINT + "/batch", json={"items": [item]}, headers=HEADERS)
+    first = response.json()["items"][0]["job"]
     client.delete("/api/processing/polygon-areas/" + area["id"], headers=HEADERS)
     results = client.post(
         ENDPOINT + "/batch",

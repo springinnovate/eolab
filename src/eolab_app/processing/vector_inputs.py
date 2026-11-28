@@ -6,26 +6,71 @@ from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import fiona
+
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.catalog_selection import (
     CatalogSelection,
     ArtifactVectorSelection,
+    CapturedVectorSelection,
     CatalogSelectionReader,
     ResolvedCatalogSelection,
     SelectionUnavailableError,
-    VectorSelection,
+    ModelVectorSelection,
     DrawingSelection,
+    VectorFilter,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.bounded_vector import resolve_vector_file_selection
-from eolab_app.polygon_areas import SummaryPolygon
+from eolab_app.polygon_areas import PolygonAreaReference, SummaryPolygon
 from eolab_app.feature_intersection import bind_intersections
+
+
+def write_captured_vector_input(path: Path, collection: dict[str, Any]) -> None:
+    """Write one retained drawing or polygon boundary to the attempt's WGS84 GeoPackage.
+
+    Args:
+        path: Output file assigned by the worker.
+        collection: Original features and attributes or selected boundary polygons.
+
+    Raises:
+        OSError: The attempt cannot write its scratch file.
+        fiona.errors.FionaError: The native writer failed.
+    """
+    if "features" in collection:
+        fields = {"name": "str", "note": "str", "featureId": "str"}
+        records = (
+            {
+                "geometry": feature["geometry"],
+                "properties": {**feature["properties"], "featureId": feature["id"]},
+            }
+            for feature in collection["features"]
+        )
+    else:
+        fields = {}
+        records = (
+            {"geometry": polygon, "properties": {}}
+            for polygon in collection["polygons"]
+        )
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="features",
+        crs="EPSG:4326",
+        schema={
+            "geometry": "Polygon",
+            "properties": fields,
+        },
+    ) as dataset:
+        dataset.writerecords(records)
+
 
 class RetainedVectorSelectionReader:
     """Read private vector inputs retained until an accepted Processing job stops.
 
     Catalog selections use their ordinary reader. Uploads use retained original
-    files; run results use the job's accepted input-file authorization. Parent
+    files, captures use the attempt's GeoPackage, and results use the job's file authorization. Parent
     deletion or expiry cannot interrupt an already accepted calculation.
     """
 
@@ -36,6 +81,7 @@ class RetainedVectorSelectionReader:
         input_uploads: Mapping[str, str],
         retained_file: Callable[[str, str], Awaitable[Path]] | None = None,
         drawings: Mapping[str, list[dict[str, Any]]] | None = None,
+        captured_files: Mapping[str, Path] | None = None,
     ) -> None:
         """Bind vector reading to original upload and result files retained for one job.
 
@@ -47,16 +93,18 @@ class RetainedVectorSelectionReader:
             retained_file: Resolve a published result under the current job's retained
                 input authorization, including when its parent has expired.
             drawings: Selected drawing polygons captured at submission, keyed by the exact source reference.
+            captured_files: Original features materialized once for the current attempt.
         """
         self.catalog = catalog
         self.uploads = uploads
         self.input_uploads = input_uploads
         self.retained_file = retained_file
         self.drawings = drawings or {}
+        self.captured_files = captured_files or {}
 
     @asynccontextmanager
     async def open_selection(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: ModelVectorSelection, source_owner: str | None = None
     ) -> AsyncIterator[ResolvedCatalogSelection]:
         """Open a selection whose private file is retained for this accepted job.
 
@@ -89,7 +137,7 @@ class RetainedVectorSelectionReader:
         return await self.catalog.resolve_source(source)
 
     async def resolve_for_sampling(
-        self, selection: VectorSelection, source_owner: str | None = None
+        self, selection: ModelVectorSelection, source_owner: str | None = None
     ) -> ResolvedCatalogSelection:
         """Return the exact source and predicate for an accepted job's selection.
 
@@ -111,7 +159,8 @@ class RetainedVectorSelectionReader:
         return await bind_intersections(original, self._read_polygon_view, limits=None)
 
     async def _read_polygon_view(
-        self, source: VectorSelection | DrawingSelection,
+        self,
+        source: ModelVectorSelection | DrawingSelection,
     ) -> ResolvedCatalogSelection | tuple[SummaryPolygon, ...]:
         """Open a job's captured polygon view, following its own active conditions.
 
@@ -127,6 +176,18 @@ class RetainedVectorSelectionReader:
         if isinstance(source, DrawingSelection):
             if source.polygonArea is None:
                 return ()
+            if (
+                isinstance(source.polygonArea, PolygonAreaReference)
+                and source.polygonArea.id in self.captured_files
+            ):
+                return await self._resolve_original(
+                    CapturedVectorSelection(
+                        kind="capturedVector",
+                        reference=source.polygonArea,
+                        layerName="features",
+                        filter=VectorFilter(),
+                    )
+                )
             try:
                 polygons = self.drawings[source.polygonArea.model_dump_json()]
             except KeyError as error:
@@ -134,7 +195,9 @@ class RetainedVectorSelectionReader:
             return tuple(SummaryPolygon.model_validate(polygon) for polygon in polygons)
         return await self.resolve_for_sampling(source)
 
-    async def _resolve_original(self, selection: VectorSelection) -> ResolvedCatalogSelection:
+    async def _resolve_original(
+        self, selection: ModelVectorSelection
+    ) -> ResolvedCatalogSelection:
         """Locate the job's original vector before binding right-hand spatial conditions.
 
         Args:
@@ -146,6 +209,11 @@ class RetainedVectorSelectionReader:
         Raises:
             SelectionUnavailableError: If job retention cannot supply the file.
         """
+        if isinstance(selection, CapturedVectorSelection):
+            path = self.captured_files[selection.reference.id]
+            return await asyncio.to_thread(
+                resolve_vector_file_selection, path, selection
+            )
         if isinstance(selection, CatalogSelection):
             if not selection.filter.intersections:
                 return await self.catalog.resolve_for_sampling(selection)

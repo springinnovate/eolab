@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.aggregate_models import (
     AggregateGrid,
     AggregateValue,
@@ -138,14 +138,14 @@ class SamplingBoxArea(ModelSchema):
 
 
 class SelectionArea(ModelSchema):
-    """An analysis area selected from a catalog vector or private uploaded layer.
+    """An analysis area selected from the features of a model vector input.
 
     The stored selection identifies the original dataset and filter rules.
     Processing reads the matching features when preparing the run.
     """
 
     kind: Literal["catalogSelection"]
-    selection: VectorSelection
+    selection: ModelVectorSelection
 
 
 class PolygonArea(ModelSchema):

@@ -38,7 +38,7 @@ from eolab_app.routes.processing import COOKIE
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference
-from test_model_runs_postgres import model_boundary, model_request, submit
+from test_model_runs_postgres import drawing_input, model_boundary, model_request, submit
 from test_model_artifacts_postgres import multiple_boundary
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from raster_source_support import SOURCE
@@ -732,7 +732,7 @@ def test_input_retention_releases_after_every_terminal_path(
     assert not path.exists()
 
 
-@pytest.mark.parametrize("outcome", ["rollback", "commit", "cancel", "expire"])
+@pytest.mark.parametrize("outcome", ["rollback", "commit", "drawing", "cancel", "expire"])
 def test_worker_recovers_unanswered_claim_with_retained_input(
     model_boundary: Any,
     store: PostgresJobStore,
@@ -745,15 +745,20 @@ def test_worker_recovers_unanswered_claim_with_retained_input(
         model_boundary: Real model routes, worker and artifact storage.
         store: Disposable single-slot PostgreSQL queue.
         monkeypatch: Fail the claim at the transaction boundary before or after commit.
-        outcome: Roll back, commit normally, cancel the committed job or expire its lease.
+        outcome: Roll back, recover a whole-raster or drawing run, cancel, or expire.
     """
     client, worker, _ = model_boundary
     parent, source, path = publish_input(model_boundary)
+    area = {"kind": "wholeRaster"}
+    documents = {}
+    if outcome == "drawing":
+        from test_polygon_summary_areas import rectangle
+
+        selection, documents = drawing_input(rectangle(-40, -40, 40, 40))
+        area = {"kind": "catalogSelection", "selection": selection}
     child = submit(
         client,
-        model_request(
-            client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
-        ),
+        model_request(client, inputs={"raster": source, "area": area}), documents,
     )
     child_url = f"/api/processing/jobs/{child['jobId']}"
     assert (

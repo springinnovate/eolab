@@ -24,7 +24,7 @@
  * @typedef {Object} VectorInputDefinition
  * @property {"vector"} type Input family.
  * @property {string} label User-facing layer selector label.
- * @property {"polygon"} [geometry] Optional polygon restriction; composed calculation inputs currently contain polygon sources only.
+ * @property {"polygon"} [geometry] Restrict the input to polygon layers when specified.
  * @property {Object<string,VectorFieldDefinition>} [fields] Named field selectors; absent or empty for a source-only input.
  * @property {VectorInputRowsDefinition} [rows] Optional repeated controls, with at least one row and no maximum count.
  */
@@ -33,11 +33,14 @@
  * @typedef {Object} VectorInputSource
  * @property {string} key Map-layer identity, independent of its visibility.
  * @property {string} label User-facing layer name.
+ * @property {{group:string,label:string}} [originLabels] Source owner’s display text for grouped pickers.
+ * @property {"point"|"line"|"polygon"} geometryKind Native geometry family.
  * @property {Object} filter Accepted field predicate.
  * @property {Array<{name:string,type:string}>} scalarFields Attributes supporting scalar comparisons.
  * @property {Array<{name:string,type:string}>} numericFields Numeric attributes.
  * @property {Object} selection Path-free source/layer identity and accepted predicate.
  * @property {Object} allSelection Same source/layer identity with no predicate.
+ * @property {{matched:number,total:number}} [featureCounts] Counts already known to the source owner.
  */
 
 /** Independent choices retained while one vector input is edited.
@@ -86,13 +89,33 @@ function createClearedVectorFields(state, definition) {
     } : {})};
 }
 
+/** List the layers with an eligible attribute for every fixed and repeatable field.
+ * @param {Pick<VectorInputDefinition,"geometry"|"fields"|"rows">} definition Geometry and attribute requirements declared by this input.
+ * @param {VectorInputSource[]} sources Composed sources with their field metadata.
+ * @return {VectorInputSource[]} Compatible layers in the original picker order.
+ */
+export function eligibleVectorSources(definition, sources) {
+    const roles = [...Object.values(definition.fields ?? {}), ...Object.values(definition.rows?.fields ?? {})];
+    return sources.filter(source => (!definition.geometry || definition.geometry === source.geometryKind) &&
+        roles.every(field => fieldsForRole(source, field).length));
+}
+
+/** Return the attributes that can fill a recipe role on this source.
+ * @param {VectorInputSource} source Composed layer metadata.
+ * @param {VectorFieldDefinition} field Declared attribute role.
+ * @return {Array<{name:string,type:string}>} Available attributes of the requested kind.
+ */
+function fieldsForRole(source, field) {
+    return field.kind === "numeric" ? source.numericFields : source.scalarFields;
+}
+
 /** Initialize fields and one configured row without an implicit source choice.
  * @param {VectorInputDefinition} definition Installed input declaration.
  * @param {{vectors?:VectorInputSource[]}} context Current source metadata from composition.
  * @return {VectorInputState} Detached editable input state.
  */
 function createVectorInputDraft(definition, context) {
-    return {vectorKey: "", vectors: structuredClone(context.vectors ?? []), featureScope: "filtered",
+    return {vectorKey: "", vectors: structuredClone(eligibleVectorSources(definition, context.vectors ?? [])), featureScope: "filtered",
         fields: emptyVectorFields(definition.fields), ...(definition.rows ? {rows: [createVectorInputRow(definition.rows)], capturedRowFields: {}} : {}),
         capturedSelection: null, selectionError: ""};
 }
@@ -109,7 +132,7 @@ function captureVectorFields(values, definitions, source, context = "") {
     return Object.fromEntries(Object.entries(definitions).map(([role, field]) => {
         const selected = values[role], label = context ? `${context}: ${field.label}` : field.label;
         if (!selected) throw new Error(`Choose a field for ${label}.`);
-        const choices = source ? field.kind === "numeric" ? source.numericFields : source.scalarFields : null;
+        const choices = source ? fieldsForRole(source, field) : null;
         if (choices && !choices.some(value => value.name === selected)) throw new Error(`Choose an available field for ${label}.`);
         return [role, selected];
     }));
@@ -126,6 +149,8 @@ function captureVectorFields(values, definitions, source, context = "") {
 function captureVectorInput(state, definition) {
     const source = state.vectors.find(value => value.key === state.vectorKey);
     if (!source && !state.capturedSelection) throw new Error(`Choose a layer for ${definition.label}.`);
+    const count = state.featureScope === "all" ? source?.featureCounts?.total : source?.featureCounts?.matched;
+    if (count === 0) throw new Error("No features match. Add a feature or change the layer filter.");
     const fields = captureVectorFields(state.fields, definition.fields ?? {}, source);
     let rows;
     if (definition.rows) {
@@ -153,7 +178,7 @@ function captureVectorInput(state, definition) {
  * @return {void}
  */
 function refreshVectorInput(state, definition, context) {
-    state.vectors = structuredClone(context.vectors ?? []);
+    state.vectors = structuredClone(eligibleVectorSources(definition, context.vectors ?? []));
     if (state.vectorKey && !state.vectors.some(source => source.key === state.vectorKey)) {
         state.vectorKey = "";
         Object.assign(state, createClearedVectorFields(state, definition));
@@ -311,7 +336,7 @@ class VectorInputView {
      * @return {boolean} Whether a live source lacks attributes of the required kind.
      */
     renderField(control, field, selected, source, capturedFields) {
-        const choices = source ? field.kind === "numeric" ? source.numericFields : source.scalarFields : (capturedFields ?? []).map(name => ({name}));
+        const choices = source ? fieldsForRole(source, field) : (capturedFields ?? []).map(name => ({name}));
         this.ui.options(control, [{value: "", label: field.kind === "numeric" ? "Choose a numeric field…" : "Choose a field…"},
             ...choices.map(value => ({value: value.name, label: value.name}))], selected);
         control.disabled = !source && !capturedFields;

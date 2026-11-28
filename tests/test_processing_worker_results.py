@@ -5,10 +5,13 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
+import weakref
 
+import fiona
 import numpy as np
 import pytest
 import rasterio
@@ -47,8 +50,51 @@ def test_real_plan_worker_and_public_result(
         "read",
         Mock(side_effect=AssertionError("Catalog files are immutable")),
     )
-    authorizer = SimpleNamespace(authorize=AsyncMock(return_value=authorized))
+    class InputDocument(dict[str, Any]):
+        """One decoded source whose lifetime can be observed without retaining it."""
+
+    loaded: list[weakref.ReferenceType[InputDocument]] = []
+
+    def read_document(job_id: str, attempt_id: str, input_id: str) -> InputDocument:
+        """Return the claimed job's private source and record a weak reference to it.
+
+        Args:
+            job_id: Claimed fixture job used as the source key.
+            attempt_id: Worker attempt reading the source.
+            input_id: Retained source being materialized.
+
+        Returns:
+            Drawing documents owned by the worker until it writes its GeoPackage.
+        """
+        document = InputDocument(features=[])
+        loaded.append(weakref.ref(document))
+        return document
+
+    native_open = fiona.open
+    prior_sources_alive = []
+    def check_release(path: Path, *args: Any, **kwargs: Any) -> fiona.Collection:
+        """Open the actual GeoPackage after checking the preceding source was released."""
+        if Path(path).name == "input-vector-1.gpkg":
+            prior_sources_alive.append(loaded[0]() is not None)
+        return native_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(fiona, "open", check_release)
+
+    def authorize_after_capture(source: Any) -> SimpleNamespace:
+        """Return the fixture raster once the decoded vector inputs have been released.
+
+        Args:
+            source: Raster reference requested by the calculation.
+
+        Returns:
+            The authorized raster with its original path and signature.
+        """
+        assert len(loaded) == 2 and all(reference() is None for reference in loaded)
+        return authorized
+
+    authorizer = SimpleNamespace(authorize=AsyncMock(side_effect=authorize_after_capture))
     store = Mock()
+    store.read_job_input.side_effect = read_document
     store.get_cached_calculation_results.return_value = {}
     identifier = "a" * 32
     limits = RasterClipLimits()
@@ -66,6 +112,7 @@ def test_real_plan_worker_and_public_result(
     row = {
         "id": identifier,
         "input_uploads": {},
+        "input_ids": ["first", "second"],
         "attempt_id": "b" * 32,
         "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,
@@ -83,6 +130,7 @@ def test_real_plan_worker_and_public_result(
     store.finish.return_value = True
     worker = ProcessingWorker(authorizer, store, artifacts, limits)
     assert asyncio.run(worker.run_once())
+    assert prior_sources_alive == [False], "The preceding layer is still in memory"
     prepared = AggregateSpec.model_validate(row["spec"])
     assert operation.parse_specification(prepared) is prepared
     authorizer.authorize.assert_awaited_once_with(request.sources["a"])
@@ -100,6 +148,46 @@ def test_real_plan_worker_and_public_result(
     assert str(path) not in response.model_dump_json()
     ready["status"] = "cancelled"
     assert serialize_processing_job(ready)["result"] is None
+
+
+def test_worker_waits_for_input_read_on_cancellation(tmp_path: Path) -> None:
+    """Keep ownership of the cancelled attempt until its blocking source read returns.
+
+    Args:
+        tmp_path: Private scratch directory for the attempt.
+    """
+    entered, release = Event(), Event()
+    store = Mock()
+    def read_input(*args: str) -> dict[str, Any]:
+        """Hold the input read until the test lets the worker release its slot."""
+        entered.set()
+        assert release.wait(10)
+        return {"features": []}
+
+    store.read_job_input.side_effect = read_input
+    artifacts = LocalJobArtifacts(tmp_path)
+    artifacts.initialize()
+    worker = ProcessingWorker(Mock(), store, artifacts, RasterClipLimits())
+    spec = UnpreparedCalculation(request=AggregatePlanRequest(
+        sources={"a": SOURCE}, wholeRaster=True,
+        calculations=[{"label": "Mean", "expression": "mean(a)"}]))
+    row = {"id": "a" * 32, "attempt_id": "b" * 32, "input_ids": ["source"],
+           "spec": spec.model_dump(mode="json", by_alias=True)}
+
+    async def cancel_read() -> None:
+        """Cancel after the read starts and observe the attempt before releasing it."""
+        task = asyncio.create_task(worker._execute(row))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=0.1)
+            assert not done, "The attempt released its slot with an active input read"
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(cancel_read())
 
 
 def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:

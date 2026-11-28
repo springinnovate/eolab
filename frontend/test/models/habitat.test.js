@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { bindModelVectorInputs, modelVectorSources } from "../../src/model-vector-sources.js";
+import { describeDrawingVectorLayer } from "../../src/annotations/summary-area.js";
+import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { ModelsController } from "../../src/models/controller.js";
 import { ModelsView } from "../../src/models/view.js";
 import { captureModelSubmission, createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
@@ -101,8 +104,8 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
     const context = {
         rasters: ["Environment", "Habitat class", "Productivity", "Reference mask", "Assessment mask"].map((label, index) =>
             ({collectionId: "eolab-mounted-geotiffs", itemId: `geotiff-${index.toString(16).padStart(24, "0")}`, label, visible: false})),
-        vectors: [{...selection, key: "view:basins", label: "Catalog basins", sourceOrigin: "catalog", fields: [{name: "BASIN", type: "str"}]},
-            {key: "view:sites", sourceOrigin: "upload", uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
+        vectors: [{...selection, key: "view:basins", label: "Catalog basins", originLabels: {group: "Catalog layers", label: "Catalog"}, fields: [{name: "BASIN", type: "str"}]},
+            {key: "view:sites", originLabels: {group: "Your uploads", label: "Uploaded by you"}, uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "reference_sites", label: "Uploaded sites",
                 filter: structuredClone(selection.filter), fields: [{name: "BASIN", type: "str"}]}],
         area: {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}},
         ...contextOverrides,
@@ -112,18 +115,24 @@ async function fixture(contextOverrides = {}, showAreaOutline = async () => true
         getCatalogItem: async source => ({collection: source.collectionId, id: source.itemId, properties: {title: "Watersheds"}}),
         getHabitatPreparationSelections: async () => ({selections: structuredClone(preparationSelections)}),
         getHabitatPreparationCoverage: async (_selection, year) => ({year, requiredTiles: 4, cachedTiles: 4, missingTiles: 0}),
-        uploadPolygonArea: async polygons => {
-            const polygonArea = {id: String(uploads.length + 1).padStart(32, "0"), sha256: "a".repeat(64)};
-            uploads.push({polygons, polygonArea}); return {polygonArea};
+        captureVectorInput: async collection => {
+            const reference = {id: String(uploads.length + 1).padStart(32, "0"), sha256: "a".repeat(64)};
+            uploads.push({collection, reference}); return reference;
         },
-        discardPolygonArea: async id => { released.push(id); },
+        discardVectorInput: async id => { released.push(id); },
         submitModelRun: async request => { requests.push(request); return job({model: habitat}); },
         getJob: async () => job({model: habitat}),
         readModelInvocation: async () => ({...requests[0], model: {...habitat, definition: habitat}})};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
     const jobs = {subscribe: () => () => {}, tracked: new Set(), schedule() {}, accept() {}};
     let id = 0;
-    const controller = new ModelsController({api, jobs, view, getContext: () => context, showAreaOutline, catalogRasters,
+    const controller = new ModelsController({api, jobs, view, getContext: () => ({...context,
+        vectors: [...context.vectors.map(value => ({geometryKind: "polygon", ...value})),
+            ...modelVectorSources([], (context.drawings ?? []).map(target => describeDrawingVectorLayer(target)))]}), showAreaOutline, catalogRasters,
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, {readLayer: key => {
+            const target = context.drawings?.find(value => value.key === key);
+            return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
+        }, readBoundary: assert.fail}, collection => api.captureVectorInput(collection), acquired, isCurrent),
         getCatalogItem: (source, signal) => api.getCatalogItem(source, signal),
         prepareVector: async source => ({selection: source.uploadId
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}
@@ -1036,64 +1045,66 @@ test("direct spatial choices retain opaque view identity, independent filters an
 /** Supply a committed annotation snapshot with one polygon matching the map filter.
  * @param {string} label Layer name displayed by the chooser.
  * @param {number} west Left edge of its matched polygon.
- * @return {{key:string,label:string,polygons:Array<{type:string,coordinates:number[][][]}>,total:number}} Drawn layer with three committed polygons.
+ * @return {Object} Editor target containing three committed polygons and a text filter.
  */
 function drawnPolygonLayer(label, west) {
-    return {key: `local:annotation:${label}`, label, total: 3,
-        polygons: [{type: "Polygon", coordinates: [[[west, 0], [west + 1, 0], [west, 1], [west, 0]]]}]};
+    return {key: `local:annotation:${label}`, label, filter: {enabled: true, match: "all", rules: [{field: "note", operator: "eq", value: "use"}]},
+        polygons: [0, 1, 2].map(i => ({id: `shape-${i}`, name: `${label} ${i}`, note: i ? "omit" : "use",
+            vertices: [[west + i, 0], [west + i + 1, 0], [west + i, 1]]}))};
 }
 
 test("manual Ecosystem inputs select filtered drawn layers and capture them together at Run", async t => {
     const study = drawnPolygonLayer("Study", 0), references = drawnPolygonLayer("Forest", 2);
-    const h = await fixture({drawnPolygonLayers: [study, references]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
+    const h = await fixture({drawings: [study, references]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
     const {area, references: sites} = h.view.setup.inputs;
-    edit(area.source, `drawn:${study.key}`); edit(sites.source, `drawn:${references.key}`);
-    assert.equal(area.source.value, `drawn:${study.key}`);
-    assert.equal(sites.source.value, `drawn:${references.key}`);
-    assert.equal(sites.selectedCount.textContent, "1 of 3 polygons selected");
-    assert.match(sites.filterDescription.textContent, /layer's filter/);
-    assert.equal(sites.editFilter.hidden, true);
+    edit(area.source, `vector:${study.key}`); edit(sites.source, `vector:${references.key}`);
+    assert.equal(area.source.value, `vector:${study.key}`);
+    assert.equal(sites.source.value, `vector:${references.key}`);
+    assert.equal(sites.selectedCount.textContent, "1 of 3 features selected");
+    assert.match(sites.filterDescription.textContent, /note equals/);
+    assert.equal(sites.editFilter.hidden, false);
     assert.equal(sites.resampling, undefined);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(h.uploads, []);
 
-    h.context.drawnPolygonLayers = [study]; h.controller.refreshMapLayers();
+    h.context.drawings = [study]; h.controller.refreshMapLayers();
     assert.equal(sites.source.value, "");
-    assert.equal(area.source.value, `drawn:${study.key}`);
-    h.context.drawnPolygonLayers.push({...references, polygons: []}); h.controller.refreshMapLayers();
-    assert.equal(sites.selectedCount.textContent, "0 of 3 polygons selected");
-    assert.match(sites.vectorStatus.textContent, /No polygons match/);
+    assert.equal(area.source.value, `vector:${study.key}`);
+    h.context.drawings.push({...references, polygons: references.polygons.map(polygon => ({...polygon, note: "omit"}))}); h.controller.refreshMapLayers();
+    edit(sites.source, `vector:${references.key}`);
+    assert.equal(sites.selectedCount.textContent, "0 of 3 features selected");
+    assert.match(sites.vectorStatus.textContent, /No features match/);
     assert.equal(h.view.setup.run.disabled, true);
     await h.controller.submit();
     assert.deepEqual(h.uploads, [], "an invalid second choice is checked before uploading the first");
 
-    h.context.drawnPolygonLayers[1] = references;
-    const captured = structuredClone(references.polygons);
+    h.context.drawings[1] = references;
+    const captured = exportAnnotationGeoJSON({name: references.label, polygons: references.polygons});
     let finishUpload;
     const firstUpload = new Promise(resolve => { finishUpload = resolve; });
-    const upload = h.api.uploadPolygonArea;
-    h.api.uploadPolygonArea = async polygons => {
+    const upload = h.api.captureVectorInput;
+    h.api.captureVectorInput = async polygons => {
         const reply = await upload(polygons);
         if (h.uploads.length === 1) await firstUpload;
         return reply;
     };
     const submitting = h.controller.submit();
     assert.equal(h.uploads.length, 1);
-    references.polygons[0].coordinates[0][1][0] += 0.5;
+    references.polygons[0].vertices[1][0] += 0.5;
     finishUpload(); await submitting;
-    assert.deepEqual(h.uploads[1].polygons, captured, "both choices were copied before the first upload");
-    assert.deepEqual(h.requests[0].inputs.area, {kind: "polygonArea", reference: h.uploads[0].polygonArea});
-    assert.deepEqual(h.requests[0].inputs.references, {kind: "polygonArea", reference: h.uploads[1].polygonArea});
-    assert.deepEqual(h.released, []);
+    assert.deepEqual(h.uploads[1].collection, captured, "both choices were copied before the first upload");
+    assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: {kind: "capturedVector", reference: h.uploads[0].reference, layerName: "features", filter: study.filter}});
+    assert.deepEqual(h.requests[0].inputs.references, {kind: "vector", selection: {kind: "capturedVector", reference: h.uploads[1].reference, layerName: "features", filter: references.filter}});
+    assert.deepEqual(h.released, h.uploads.map(upload => upload.reference.id));
 
     h.controller.chooseModel(model);
-    assert.equal(h.view.setup.inputs.area.source.querySelectorAll("optgroup").some(group => group.label === "Drawn polygons"), false);
+    assert.equal(h.view.setup.inputs.area.source.querySelectorAll("optgroup").some(group => group.label === "Drawn polygons"), true);
 });
 
 test("one drawn layer used for both inputs uploads once and duplication keeps the exact accepted reference", async t => {
     const layer = drawnPolygonLayer("Forest", 2);
-    const h = await fixture({drawnPolygonLayers: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
-    for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `drawn:${layer.key}`);
+    const h = await fixture({drawings: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
+    for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `vector:${layer.key}`);
     let accept;
     h.api.submitModelRun = request => { h.requests.push(request); return new Promise(resolve => { accept = resolve; }); };
     const submitting = h.controller.submit();
@@ -1102,8 +1113,8 @@ test("one drawn layer used for both inputs uploads once and duplication keeps th
     assert.equal(h.view.elements["recovery-message"].textContent, "Starting run “Ecosystem Condition”…");
     accept(job({model: habitat})); await submitting;
     assert.equal(h.uploads.length, 1);
-    assert.deepEqual(h.requests[0].inputs.area, h.requests[0].inputs.references);
-    h.context.drawnPolygonLayers = [];
+    assert.deepEqual(h.requests[0].inputs.area.selection, h.requests[0].inputs.references.selection);
+    h.context.drawings = [];
     await h.controller.duplicateRun();
     assert.equal(h.view.setup.inputs.area.source.value, "captured");
     assert.equal(h.view.setup.inputs.references.source.value, "captured");
@@ -1115,20 +1126,20 @@ test("one drawn layer used for both inputs uploads once and duplication keeps th
     await h.controller.submit();
     assert.deepEqual(h.requests[1].inputs, h.requests[0].inputs);
     assert.equal(h.uploads.length, 1);
-    assert.deepEqual(h.released, [], "a duplicated request does not own the original run's reference");
+    assert.deepEqual(h.released, [h.uploads[0].reference.id], "only the original submission owns a device attachment");
     assert.match(h.controller.state.error, /Select the layer again/);
     assert.equal(h.controller.state.pending, null);
 });
 
 for (const obsolete of [false, true]) test(`drawn polygon preparation releases partial uploads when ${obsolete ? "setup changes" : "the second upload fails"}`, async t => {
     const study = drawnPolygonLayer("Study", 0), references = drawnPolygonLayer("Forest", 2);
-    const h = await fixture({drawnPolygonLayers: [study, references]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
-    edit(h.view.setup.inputs.area.source, `drawn:${study.key}`);
-    edit(h.view.setup.inputs.references.source, `drawn:${references.key}`);
+    const h = await fixture({drawings: [study, references]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
+    edit(h.view.setup.inputs.area.source, `vector:${study.key}`);
+    edit(h.view.setup.inputs.references.source, `vector:${references.key}`);
     let finishUpload;
     const firstUpload = new Promise(resolve => { finishUpload = resolve; });
-    const upload = h.api.uploadPolygonArea;
-    h.api.uploadPolygonArea = async polygons => {
+    const upload = h.api.captureVectorInput;
+    h.api.captureVectorInput = async polygons => {
         if (h.uploads.length) throw new Error("Could not upload the second layer");
         const reply = await upload(polygons); await firstUpload; return reply;
     };
@@ -1136,7 +1147,7 @@ for (const obsolete of [false, true]) test(`drawn polygon preparation releases p
     if (obsolete) h.controller.chooseModel(habitat);
     finishUpload(); await submitting;
     assert.deepEqual(h.requests, []);
-    assert.deepEqual(h.released, [h.uploads[0].polygonArea.id]);
+    assert.deepEqual(h.released, [h.uploads[0].reference.id]);
     assert.equal(h.controller.state.pending, null);
     if (obsolete) assert.equal(h.controller.state.error, "");
     else assert.match(h.controller.state.error, /Could not upload the second layer/);
@@ -1144,8 +1155,8 @@ for (const obsolete of [false, true]) test(`drawn polygon preparation releases p
 
 test("uncertain admission retries the captured drawn references and releases them on definite rejection", async t => {
     const layer = drawnPolygonLayer("Forest", 2);
-    const h = await fixture({drawnPolygonLayers: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
-    for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `drawn:${layer.key}`);
+    const h = await fixture({drawings: [layer]}); t.after(() => h.controller.destroy()); chooseStack(h); await settle();
+    for (const name of ["area", "references"]) edit(h.view.setup.inputs[name].source, `vector:${layer.key}`);
     h.api.submitModelRun = async request => {
         h.requests.push(request);
         if (h.requests.length === 1) throw new TypeError("Connection lost");
@@ -1154,11 +1165,11 @@ test("uncertain admission retries the captured drawn references and releases the
     await h.controller.submit();
     assert.deepEqual(h.controller.state.pending, h.requests[0]);
     assert.deepEqual(h.released, []);
-    h.context.drawnPolygonLayers = [];
+    h.context.drawings = [];
     await h.controller.submit(true);
     assert.deepEqual(h.requests[1], h.requests[0]);
     assert.equal(h.uploads.length, 1);
-    assert.deepEqual(h.released, [h.uploads[0].polygonArea.id]);
+    assert.deepEqual(h.released, [h.uploads[0].reference.id]);
     assert.equal(h.controller.state.pending, null);
 });
 
@@ -1407,14 +1418,14 @@ test("duplicate matches the full saved selection regardless of object-key order 
 
 test("Earth Engine preparation selections keep drawn Reference sites independent and upload only those polygons", async t => {
     const references = drawnPolygonLayer("Forest", 2);
-    const h = await fixture({drawnPolygonLayers: [references]}); t.after(() => h.controller.destroy());
+    const h = await fixture({drawings: [references]}); t.after(() => h.controller.destroy());
     await choosePreparationSelection(h);
-    edit(h.view.setup.inputs.references.source, "drawn:" + references.key);
+    edit(h.view.setup.inputs.references.source, "vector:" + references.key);
     await h.controller.submit();
     assert.equal(h.uploads.length, 1);
-    assert.deepEqual(h.uploads[0].polygons, references.polygons);
+    assert.deepEqual(h.uploads[0].collection, exportAnnotationGeoJSON({name: references.label, polygons: references.polygons}));
     assert.deepEqual(h.requests[0].inputs.area, {kind: "catalogSelection", selection: preparationSelections[0]});
-    assert.deepEqual(h.requests[0].inputs.references, {kind: "polygonArea", reference: h.uploads[0].polygonArea});
+    assert.deepEqual(h.requests[0].inputs.references, {kind: "vector", selection: {kind: "capturedVector", reference: h.uploads[0].reference, layerName: "features", filter: references.filter}});
 });
 
 

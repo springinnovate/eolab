@@ -498,7 +498,7 @@ def create_app(
                         if revision != drawing.revision:
                             raise PublishedLayerChangedError("The drawing changed. Reapply its filter.")
                     else:
-                        await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256, include_geometry=False)
+                        await asyncio.to_thread(processing_store.get_input, owner, drawing.id, drawing.sha256, "application/json", include_geometry=False)
                 private = (
                     await vector_publication.authorize_artifact_layers(layer_names, owner)
                     or private

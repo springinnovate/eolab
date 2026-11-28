@@ -12,6 +12,7 @@ WHERE false;
 -- Only keys and lifecycle hooks that affect correctness participate. An index's
 -- name and optional query-performance indexes do not determine compatibility.
 WITH version_23 AS (SELECT FROM processing.schema_version WHERE version=23),
+version_24 AS (SELECT FROM processing.schema_version WHERE version=24),
 required_keys(relation, columns, partial) AS (VALUES
     ('jobs', ARRAY['id'], false), ('jobs', ARRAY['work_key'], true),
     ('job_subscribers', ARRAY['id'], false), ('job_subscribers', ARRAY['owner','request_key'], false),
@@ -19,6 +20,7 @@ required_keys(relation, columns, partial) AS (VALUES
     ('transfers', ARRAY['id'], false), ('inputs', ARRAY['id'], false),
     ('calculation_results', ARRAY['cache_key'], false)
     UNION ALL SELECT 'job_turns', ARRAY['job_id','owner'], false FROM version_23
+    UNION ALL SELECT 'job_inputs', ARRAY['input_id','job_id'], false FROM version_24
 ), required_hooks(relation, function_name) AS (VALUES
     ('jobs','retain_terminal_metadata'), ('jobs','release_finished_inputs'),
     ('jobs','notify_job_change'), ('jobs','notify_execution_capacity'),
@@ -28,9 +30,18 @@ required_keys(relation, columns, partial) AS (VALUES
     ('job_subscribers','job_id','c'), ('transfers','job_id','c'),
     ('input_files','job_id','c'), ('input_files','parent_id','a')
     UNION ALL SELECT 'job_turns','job_id','c' FROM version_23
+    UNION ALL SELECT 'job_inputs','job_id','c' FROM version_24
 )
 SELECT 'the subscribed_jobs view' AS problem
 WHERE (SELECT relkind FROM pg_class WHERE oid='processing.subscribed_jobs'::regclass)<>'v'
+UNION ALL
+SELECT 'retained private inputs' FROM version_24 WHERE
+    NOT EXISTS (SELECT FROM pg_attribute WHERE attrelid='processing.inputs'::regclass
+                AND attname='media_type' AND atttypid='text'::regtype AND attnotnull)
+    OR NOT EXISTS (SELECT FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attname='input_id'
+        WHERE c.conrelid=to_regclass('processing.job_inputs') AND c.contype='f'
+          AND c.confrelid='processing.inputs'::regclass AND c.convalidated AND c.conkey=ARRAY[a.attnum])
 UNION ALL
 SELECT 'unexpected unversioned job turns' WHERE NOT EXISTS (SELECT FROM version_23)
     AND to_regclass('processing.job_turns') IS NOT NULL

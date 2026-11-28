@@ -5,7 +5,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.habitat_earth_engine import load_habitat_stack
@@ -219,7 +219,7 @@ class VectorReferenceSites(HabitatSchema):
     """Use selected Catalog or uploaded polygons as reference sites."""
 
     kind: Literal["vector"]
-    selection: VectorSelection
+    selection: ModelVectorSelection
 
 
 class PolygonReferenceSites(HabitatSchema):
@@ -317,7 +317,7 @@ class HabitatRequest(HabitatSchema):
     settings: HabitatSettings
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
 

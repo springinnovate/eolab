@@ -10,6 +10,9 @@ from eolab_app.processing.artifact_manifest import ArtifactManifest, ProducedFil
 
 OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
+MAX_STAGED_INPUT_BYTES = 64 * 1024**2
+"""Total compact UTF-8 bytes available to private inputs awaiting admission."""
+
 
 @dataclass(frozen=True)
 class JobInputFile:
@@ -33,6 +36,34 @@ class JobInputFile:
 
 
 @dataclass(frozen=True)
+class JobInputReference:
+    """Identify private JSON that an accepted job needs for execution and duplication.
+
+    Attributes:
+        id: Input identifier returned to its owner.
+        sha256: Expected checksum supplied by the source producer.
+        media_type: Input format understood by the operation.
+    """
+
+    id: str
+    sha256: str
+    media_type: str
+
+
+@dataclass(frozen=True)
+class JobInputDocument:
+    """A validated private input delivered with this submission.
+
+    Attributes:
+        reference: Opaque ID, checksum of the submitted document and required format.
+        content: Compact normalized JSON, held in memory or in a request-owned file.
+    """
+
+    reference: JobInputReference
+    content: bytes | Path
+
+
+@dataclass(frozen=True)
 class PreparedJobPlan:
     """Validated operation data supplied to storage by its application owner.
 
@@ -48,6 +79,8 @@ class PreparedJobPlan:
             The parent retains each input until dependent work stops.
         input_uploads: Original upload IDs mapped to private retained-file tokens.
             These files remain available until the accepted computation stops.
+        input_references: Private JSON inputs to authorize and retain on admission.
+        input_documents: New private inputs to insert in the same transaction as the job.
         minimum_retention_seconds: Optional minimum lifetime for both published
             results and saved details after completion. Storage captures the larger
             of this duration and the deployment's result and metadata lifetimes.
@@ -62,6 +95,8 @@ class PreparedJobPlan:
     input_files: tuple[JobInputFile, ...] = ()
     input_uploads: dict[str, str] = field(default_factory=dict)
     minimum_retention_seconds: int | None = None
+    input_references: tuple[JobInputReference, ...] = ()
+    input_documents: tuple[JobInputDocument, ...] = ()
 
 
 @dataclass(frozen=True)

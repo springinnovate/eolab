@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from pydantic import BaseModel, TypeAdapter
 
-from eolab_app.catalog_selection import VectorSelection
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
 from eolab_app.polygon_areas import PolygonAreaReference
 from eolab_app.processing.aggregate_models import (
@@ -235,7 +235,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         | None
     )
     polygon_inputs: Callable[[Request], dict[str, PolygonAreaReference]]
-    vector_selections: Callable[[Request], dict[str, VectorSelection]]
+    vector_selections: Callable[[Request], dict[str, ModelVectorSelection]]
     queue: Callable[[Request, dict[str, AggregateArea]], PreparedJobPlan]
     prepare: Callable[
         [

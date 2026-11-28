@@ -1,22 +1,46 @@
 """Run vector summaries through real source, HTTP, PostgreSQL and native worker boundaries."""
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 from pathlib import Path
+from threading import Event
 from typing import Any
+from uuid import uuid4
 
 import fiona
 from fastapi.testclient import TestClient
+import numpy
+import rasterio
+from rasterio.features import geometry_mask
 import psycopg
 import pytest
 
+from eolab_app.catalog_selection import DrawingReference, SavedDrawingReference
+from eolab_app.polygon_areas import SummaryPolygon, read_polygon_area_input
+from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.vector_summary_models import VectorSummaryDetails
 from eolab_app.routes.processing import COOKIE
-from test_model_runs_postgres import model_request, submit
-from test_processing_jobs import HEADERS, store
+from test_model_runs_postgres import (
+    drawing_input,
+    post_model_run,
+    model_boundary,
+    model_request,
+    submit,
+)
+from catalog_selection_support import register_selection
+from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector_uploads import VectorUploadStore
+from eolab_app.routes.vector_uploads import create_vector_uploads_router
+from test_polygon_summary_areas import rectangle
+from raster_source_support import SOURCE
+from test_processing_jobs import HEADERS, boundary, store
+from test_processing_calculations import ENDPOINT, request_body
 from test_processing_uploaded_vectors import UploadBoundary, upload_boundary
 from test_vector_uploads import HEADERS as UPLOAD_HEADERS, write_layer
 
@@ -208,6 +232,449 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     assert client.delete(base, headers=HEADERS).status_code == 200
     assert client.get(result["url"]).status_code == 409
     client.portal.call(worker.cleanup)
+
+
+def test_model_admits_a_group_without_consuming_shared_staging(
+    model_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Attach 32 drawings to one run while an unrelated sampling area occupies a staging slot."""
+    client, worker, _ = model_boundary
+    geometry = rectangle(0.1, 9.1, 0.3, 9.3)
+    sampled = client.post(
+        "/api/processing/polygon-areas", json={"polygons": [geometry]}, headers=HEADERS
+    )
+    assert sampled.status_code == 200
+    documents = {}
+    members = []
+    for index in range(32):
+        key = uuid4().hex
+        document = json.dumps(
+            {
+                "type": "FeatureCollection",
+                "name": f"Layer {index}",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "id": str(index),
+                        "properties": {"name": "Survey"},
+                        "geometry": geometry,
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        documents[key] = document
+        selection = {
+            "kind": "capturedVector",
+            "layerName": "features",
+            "filter": {},
+            "reference": {"id": key, "sha256": hashlib.sha256(document).hexdigest()},
+        }
+        members.append({"label": f"Layer {index}", "selection": selection})
+    run = model_request(
+        client,
+        "raster-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {
+                "kind": "polygonGroup",
+                "name": "Survey areas",
+                "members": members,
+            },
+        },
+    )
+    payload = b"\n".join(
+        [
+            json.dumps(run).encode(),
+            json.dumps(list(documents)).encode(),
+            *documents.values(),
+        ]
+    )
+    path = "/api/processing/model-runs/with-inputs"
+    headers = {**HEADERS, "Content-Type": "application/x-ndjson"}
+    rejected = client.post(
+        path,
+        content=payload.replace(b'"name":"Survey"', b'"name":"Changed"', 1),
+        headers=headers,
+    )
+    assert rejected.status_code == 422, rejected.text
+    with store._transaction() as cursor:
+        cursor.execute("SELECT count(*) AS count FROM processing.inputs")
+        assert cursor.fetchone()["count"] == 1
+    response = client.post(path, content=payload, headers=headers)
+    assert response.status_code == 202, response.text
+    assert client.portal.call(worker.run_once)
+    job_id = response.json()["jobId"]
+    ready = client.get(f"/api/processing/jobs/{job_id}").json()
+    assert ready["status"] == "ready", ready
+    with (
+        rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as file,
+        file.open() as raster,
+    ):
+        numpy.testing.assert_array_equal(
+            raster.read_masks(1) > 0,
+            geometry_mask(
+                [geometry],
+                raster.shape,
+                raster.transform,
+                all_touched=True,
+                invert=True,
+            ),
+        )
+    assert submit(client, run)["jobId"] == job_id
+    # Polygon-area calculations accept a staged boundary, but cannot use a retained feature collection as one.
+    valid = {**request_body(polygonArea=sampled.json()["polygonArea"]), "requestId": uuid4().hex}
+    invalid = {**valid, "requestId": uuid4().hex, "polygonArea": members[0]["selection"]["reference"]}
+    batch = client.post(
+        ENDPOINT + "/batch", json={"items": [valid, invalid]}, headers=HEADERS,
+    ).json()["items"]
+    assert "job" in batch[0] and batch[1]["error"]["code"] == "input_unavailable"
+    with store._transaction() as cursor:
+        cursor.execute(
+            "SELECT count(*) AS count FROM processing.inputs WHERE expires_at IS NOT NULL"
+        )
+        assert cursor.fetchone()["count"] == 1
+
+
+@pytest.mark.parametrize("origin", ["device", "saved", "attachment"])
+def test_duplicate_preserves_drawing_intersection(
+    model_boundary: Any, store: PostgresJobStore, origin: str
+) -> None:
+    """Duplicate the actual clip after the map releases or revises its filter boundary.
+
+    Args:
+        model_boundary: Real HTTP admission and native worker.
+        store: Disposable PostgreSQL input and job store.
+        origin: Device polygon area, scripted revision, or browser-attached feature IDs.
+    """
+    client, worker, service = model_boundary
+    geometry = rectangle(0.125, 9.125, 0.325, 9.325)
+    polygon = SummaryPolygon.model_validate(geometry)
+    revision = 1
+    selected = SavedDrawingReference(
+        drawingLayerId=uuid4(),
+        revision=revision,
+        featureIds=tuple(
+            str(uuid4()) for _ in range(450 if origin == "attachment" else 1)
+        ),
+    )
+
+    async def read_filter(
+        owner: str, reference: DrawingReference
+    ) -> tuple[SummaryPolygon, ...]:
+        """Read the current editor revision or the device's staged polygons.
+
+        Args:
+            owner: Browser session holding the map input.
+            reference: The revision and features, or a private polygon area.
+
+        Returns:
+            Selected original polygons in feature order.
+
+        Raises:
+            ProcessingError: The selection changed or staging access expired.
+        """
+        if isinstance(reference, SavedDrawingReference):
+            if reference != selected or reference.revision != revision:
+                raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+            return (polygon,) * len(reference.featureIds)
+        return (
+            await read_polygon_area_input(store.get_input, owner, reference)
+        ).polygons
+
+    service.read_filter_drawing = read_filter
+    target, documents = drawing_input(geometry)
+    saved_doc = json.dumps({"polygons": [geometry] * len(selected.featureIds)}).encode()
+    if origin == "device":
+        area = client.post(
+            "/api/processing/polygon-areas",
+            json={"polygons": [geometry]},
+            headers=HEADERS,
+        ).json()["polygonArea"]
+    elif origin == "saved":
+        area = selected.model_dump(mode="json")
+    else:
+        assert len(saved_doc) > 16 * 1024
+        area = {"id": uuid4().hex, "sha256": hashlib.sha256(saved_doc).hexdigest()}
+    target["filter"] = {
+        "rules": [
+            {
+                "operator": "intersects",
+                "layerId": str(uuid4()),
+                "source": {"kind": "drawing", "polygonArea": area},
+            }
+        ]
+    }
+    request = model_request(
+        client,
+        "raster-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {"kind": "catalogSelection", "selection": target},
+        },
+    )
+    if origin == "attachment":
+        documents[area["id"]] = saved_doc
+    job = submit(client, request, documents)
+    url = "/api/processing/jobs/" + job["jobId"]
+    saved = client.get(url + "/invocation").json()["inputs"]
+    captured = saved["area"]["selection"]["filter"]["rules"][0]["source"]["polygonArea"]
+    assert set(captured) == {"id", "sha256"}
+    revision += 1
+    if origin == "device":
+        owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+        assert store.get_input(owner, area["id"], area["sha256"], "application/json")[
+            "polygons"
+        ]
+        assert (
+            client.delete(
+                "/api/processing/polygon-areas/" + area["id"], headers=HEADERS
+            ).status_code
+            == 200
+        )
+        with pytest.raises(ProcessingError):
+            store.get_input(owner, area["id"], area["sha256"], "application/json")
+    elif origin == "saved":
+        stale = client.post(
+            "/api/processing/model-runs",
+            json={**request, "requestId": uuid4().hex},
+            headers=HEADERS,
+        )
+        assert stale.status_code == 409, stale.text
+    assert submit(client, request)["jobId"] == job["jobId"]
+    duplicate_request = {**request, "inputs": saved, "requestId": uuid4().hex}
+    with TestClient(client.app, base_url="https://testserver") as other:
+        assert (
+            other.post(
+                "/api/processing/model-runs", json=duplicate_request, headers=HEADERS
+            ).status_code
+            == 409
+        )
+    copy = submit(client, duplicate_request)
+    results = []
+    for run in (job, copy):
+        assert client.portal.call(worker.run_once)
+        ready = client.get("/api/processing/jobs/" + run["jobId"]).json()
+        assert ready["status"] == "ready", ready
+        with (
+            rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as file,
+            file.open() as raster,
+        ):
+            numpy.testing.assert_array_equal(
+                raster.read_masks(1) > 0,
+                geometry_mask(
+                    [geometry],
+                    raster.shape,
+                    raster.transform,
+                    all_touched=True,
+                    invert=True,
+                ),
+            )
+            results.append(raster.read(1))
+    numpy.testing.assert_array_equal(*results)
+
+
+def test_overlapping_retry_returns_job_accepted_before_source_error(model_boundary: Any) -> None:
+    """Return the same accepted run when a concurrent read sees a newer drawing revision.
+
+    Args:
+        model_boundary: Actual model routes, PostgreSQL queue and native worker.
+    """
+    client, worker, service = model_boundary
+    geometry = rectangle(0.1, 9.1, 0.3, 9.3)
+    target, documents = drawing_input(geometry)
+    target["filter"] = {"rules": [{"operator": "intersects", "layerId": str(uuid4()),
+        "source": {"kind": "drawing", "polygonArea": {
+            "drawingLayerId": str(uuid4()), "revision": 1, "featureIds": ["site"]}}}]}
+    request = model_request(client, "raster-clip", inputs={
+        "raster": SOURCE, "area": {"kind": "catalogSelection", "selection": target}})
+    reading, committed = Event(), Event()
+
+    async def read_revision(owner: str, reference: DrawingReference) -> tuple[SummaryPolygon, ...]:
+        """Keep one source read in flight until the identical submission commits."""
+        if not reading.is_set():
+            reading.set()
+            assert await asyncio.to_thread(committed.wait, 20)
+            raise ProcessingError("drawing_changed", "The drawing changed.", 409)
+        return (SummaryPolygon.model_validate(geometry),)
+
+    service.read_filter_drawing = read_revision
+    with ThreadPoolExecutor(1) as pool:
+        delayed = pool.submit(post_model_run, client, request, documents)
+        try:
+            assert reading.wait(10)
+            accepted = submit(client, request, documents)
+        finally:
+            committed.set()
+        reply = delayed.result(10)
+    assert reply.status_code == 202, reply.text
+    assert reply.json()["jobId"] == accepted["jobId"]
+    assert client.portal.call(worker.run_once)
+    assert client.get("/api/processing/jobs/" + accepted["jobId"]).json()["status"] == "ready"
+
+
+def test_clip_pixels_match_for_all_four_vector_sources(
+    model_boundary: Any, boundary: Any, tmp_path: Path
+) -> None:
+    """Clip the same raster with identical WGS84 features from four independent origins.
+
+    Args:
+        model_boundary: Processing API and native worker with private result storage.
+        boundary: Original raster and catalog admission fixture.
+        tmp_path: Isolated vector dataset and private upload directory.
+    """
+    client, worker, service = model_boundary
+    uploads = VectorUploadStore(tmp_path / "uploads", None)
+    service.uploads = worker.uploads = uploads
+    service.areas = worker.areas = VectorSamplingService(
+        worker.areas.catalog, worker.areas.resolver, uploads=uploads
+    )
+    client.app.include_router(create_vector_uploads_router(uploads))
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [
+            [[0.121, 9.173], [0.433, 9.173], [0.121, 9.427], [0.121, 9.173]]
+        ],
+    }
+    drawing, documents = drawing_input(geometry)
+    original = tmp_path / "sites.gpkg"
+    with fiona.open(
+        original,
+        "w",
+        driver="GPKG",
+        layer="sites",
+        crs="EPSG:4326",
+        schema={"geometry": "Polygon", "properties": {"note": "str", "count": "int"}},
+    ) as dataset:
+        for shape, note in ((geometry, "include"), (rectangle(0, 0, 1, 1), "omit")):
+            dataset.write({"geometry": shape, "properties": {"note": note, "count": 1}})
+    predicate = drawing["filter"]
+    catalog = {**register_selection(boundary[0], original), "filter": predicate}
+    response = client.post(
+        "/api/vector-uploads",
+        params={"name": "Study sites"},
+        headers=UPLOAD_HEADERS,
+        content=original.read_bytes(),
+    )
+    assert response.status_code == 201, response.text
+    upload = {
+        "uploadId": response.json()["id"],
+        "layerName": "sites",
+        "filter": predicate,
+    }
+    # This one-feature group preserves the original polygon in a real model output.
+    parent = submit(
+        client,
+        model_request(
+            client,
+            "vector-summary",
+            inputs={
+                "vector": {
+                    "selection": catalog,
+                    "fields": {"group": "note"},
+                    "rows": [
+                        {
+                            "fields": {"value": "count"},
+                            "parameters": {"statistic": "sum"},
+                        }
+                    ],
+                }
+            },
+            parameters={"boundary_tolerance_m": 0},
+        ),
+    )
+    assert client.portal.call(worker.run_once)
+    parent_url = f"/api/processing/jobs/{parent['jobId']}"
+    ready = client.get(parent_url).json()
+    assert ready["status"] == "ready", ready
+    file = next(
+        file for file in ready["artifacts"]["files"] if file["name"] == "summary"
+    )
+    artifact = {
+        "kind": "runArtifact",
+        "jobId": parent["jobId"],
+        "artifactId": file["artifactId"],
+        "layerName": ready["result"]["layerName"],
+        "filter": predicate,
+    }
+    runs = []
+    for source in (catalog, upload, artifact, drawing):
+        body = model_request(
+            client,
+            "raster-clip",
+            inputs={
+                "raster": SOURCE,
+                "area": {"kind": "catalogSelection", "selection": source},
+            },
+        )
+        runs.append(submit(client, body, documents if source is drawing else None))
+    with TestClient(client.app, base_url="https://testserver") as stranger:
+        assert (
+            stranger.post(
+                "/api/processing/model-runs", headers=HEADERS, json=body
+            ).status_code
+            == 409
+        )
+
+    assert (
+        client.delete(
+            f"/api/vector-uploads/{upload['uploadId']}", headers=UPLOAD_HEADERS
+        ).status_code
+        == 204
+    )
+    assert client.delete(parent_url, headers=HEADERS).status_code == 200
+    client.portal.call(worker.cleanup)
+    outputs = []
+    for run in runs:
+        assert client.portal.call(worker.run_once)
+        ready = client.get(f"/api/processing/jobs/{run['jobId']}").json()
+        assert ready["status"] == "ready", ready
+        with (
+            rasterio.MemoryFile(client.get(ready["result"]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            expected_mask = geometry_mask(
+                [geometry],
+                out_shape=raster.shape,
+                transform=raster.transform,
+                all_touched=True,
+                invert=True,
+            )
+            numpy.testing.assert_array_equal(raster.read_masks(1) > 0, expected_mask)
+            assert expected_mask.any() and not expected_mask.all()
+            outputs.append(
+                (raster.transform, raster.crs, raster.read(1), raster.read_masks(1))
+            )
+    for transform, crs, pixels, mask in outputs[1:]:
+        assert (transform, crs) == outputs[0][:2]
+        numpy.testing.assert_array_equal(pixels, outputs[0][2])
+        numpy.testing.assert_array_equal(mask, outputs[0][3])
+
+    original_url = f"/api/processing/jobs/{runs[-1]['jobId']}"
+    original = client.get(original_url + "/invocation").json()
+    duplicate = submit(
+        client, model_request(client, "raster-clip", inputs=original["inputs"])
+    )
+    assert client.delete(original_url, headers=HEADERS).status_code == 200
+    client.portal.call(worker.cleanup)
+    assert client.portal.call(worker.run_once)
+    duplicate_url = f"/api/processing/jobs/{duplicate['jobId']}"
+    result = client.get(duplicate_url).json()
+    assert result["status"] == "ready", result
+    with (
+        rasterio.MemoryFile(client.get(result["result"]["url"]).content) as memory,
+        memory.open() as raster,
+    ):
+        numpy.testing.assert_array_equal(raster.read(1), outputs[-1][2])
+        numpy.testing.assert_array_equal(raster.read_masks(1), outputs[-1][3])
+    assert client.delete(duplicate_url, headers=HEADERS).status_code == 200
+    unavailable = client.post(
+        "/api/processing/model-runs",
+        headers=HEADERS,
+        json=model_request(client, "raster-clip", inputs=original["inputs"]),
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["detail"]["code"] == "input_unavailable"
 
 
 def test_calculated_result_fields_survive_parent_deletion_in_processing(

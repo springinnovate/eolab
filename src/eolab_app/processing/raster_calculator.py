@@ -22,7 +22,7 @@ from shapely.geometry import box, mapping
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
-    VectorSelection,
+    ModelVectorSelection,
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.polygon_areas import PolygonAreaReference
@@ -136,7 +136,7 @@ def calculator_polygon_inputs(
 
 def calculator_vector_selections(
     request: RasterCalculatorRequest,
-) -> dict[str, VectorSelection]:
+) -> dict[str, ModelVectorSelection]:
     """Declare the original vector to authorize and retain for the run.
 
     Args:

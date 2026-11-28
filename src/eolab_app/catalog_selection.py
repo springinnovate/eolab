@@ -10,7 +10,7 @@ from math import isfinite
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
-from eolab_app.polygon_areas import PolygonAreaReference
+from eolab_app.polygon_areas import PolygonAreaReference, ProcessingInputReference
 from eolab_app.calculated_fields import CalculatedField, CompiledCalculatedField
 
 MAX_FILTER_RULES = 12
@@ -197,6 +197,27 @@ VectorSelection = CatalogSelection | UploadedSelection | ArtifactVectorSelection
 """Path-free source identity and attribute filter for vector analysis."""
 
 
+class CapturedVectorSelection(BaseModel):
+    """Select features from an immutable copy of a browser's committed drawing.
+
+    The reference covers feature IDs, attributes and WGS84 geometry. Processing
+    retains the authorized features for each accepted run before returning its ID.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    kind: Literal["capturedVector"]
+    reference: ProcessingInputReference
+    layerName: Literal["features"]
+    filter: VectorFilter
+    calculated_fields: tuple[CalculatedField, ...] = Field(
+        default=(), alias="calculatedFields", exclude_if=lambda value: not value
+    )
+
+
+ModelVectorSelection = VectorSelection | CapturedVectorSelection
+"""A model's vector source, required independently of how its original features are stored."""
+
+
 IntersectsLayer.model_rebuild()
 VectorFilter.model_rebuild()
 
@@ -281,7 +302,7 @@ class ResolvedCatalogSelection:
         read_lease: Server-only lease held while a worker reads a private result file.
     """
 
-    selection: VectorSelection
+    selection: ModelVectorSelection
     path: Path
     driver: str
     where: str | None

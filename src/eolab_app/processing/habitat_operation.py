@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 from eolab_app.bounded_vector import summary_process
+from eolab_app.catalog_selection import ModelVectorSelection
 from eolab_app.processing.stage_progress import stage_snapshot, stage_start
-from eolab_app.catalog_selection import VectorSelection
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.habitat_calculation import (
@@ -122,7 +122,7 @@ def get_habitat_raster_sources(
 
 def get_habitat_vector_selections(
     request: HabitatRequest,
-) -> dict[str, VectorSelection]:
+) -> dict[str, ModelVectorSelection]:
     """Return independently selected AOI and reference vectors for upload retention.
 
     Args:

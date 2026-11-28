@@ -1,5 +1,5 @@
 /** Connect polygon drawing, editing and local storage to the map's layer list. */
-import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
+import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget, describeDrawingVectorLayer } from "./summary-area.js";
 import { exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
@@ -551,6 +551,45 @@ export class AnnotationController {
     summaryTargets() {
         return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(
             `local:annotation:${layer.id}`, this.displayLayer(layer), this.shared.has(layer.id) ? null : layer.drawingSource));
+    }
+
+    /** Describe eligible map drawings and their filtered counts without copying coordinates.
+     * @return {ReturnType<typeof describeDrawingVectorLayer>[]} Metadata for attached drawings, including hidden layers.
+     */
+    describeVectorLayers() {
+        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => describeDrawingVectorLayer({
+            key: `local:annotation:${layer.id}`, label: layer.name, filter: layer.filter, polygons: layer.polygons,
+        }, this.shared.get(layer.id)?.polygons));
+    }
+
+    /** Export one attached drawing's committed features from every contributor.
+     * @param {string} key Map-layer identity chosen for calculation.
+     * @return {Object|null} Detached GeoJSON source, or null if the layer has been removed.
+     */
+    exportVectorLayer(key) {
+        const layer = this.model.layers.find(value => `local:annotation:${value.id}` === key);
+        return layer && this.layers.has(layer.id) ? exportAnnotationGeoJSON(this.displayLayer(layer)) : null;
+    }
+
+    /** Snapshot the selected features of an acknowledged drawing before saving a model retry.
+     * @param {{drawingLayerId:string,revision:number,featureIds:string[]}} reference Applied spatial filter.
+     * @return {Promise<{polygons:Object[]}>} Detached polygon geometries in original source order.
+     * @throws {Error} If the source revision or selected features are unavailable.
+     */
+    async exportDrawingBoundary({drawingLayerId, revision, featureIds}) {
+        const ids = new Set(featureIds);
+        const layer = this.model.layers.find(({drawingSource}) => drawingSource?.id === drawingLayerId &&
+            drawingSource.revision === revision && !drawingSource.pending);
+        let features;
+        if (layer) {
+            features = exportAnnotationGeoJSON({...layer, polygons: layer.polygons.filter(polygon => ids.has(polygon.id))}).features;
+        } else {
+            const record = await this.sourceApi.get(drawingLayerId);
+            if (record.revision !== revision) throw new Error("The drawing changed. Reapply its filter before running the tool.");
+            features = record.collection.features.filter(feature => ids.has(feature.id));
+        }
+        if (features.length !== ids.size) throw new Error("Some selected polygons are unavailable. Reapply the drawing filter.");
+        return {polygons: features.map(feature => feature.geometry)};
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.

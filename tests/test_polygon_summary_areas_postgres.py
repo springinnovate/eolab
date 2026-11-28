@@ -2,7 +2,9 @@
 
 import asyncio
 from contextlib import closing
+import json
 from pathlib import Path
+from threading import get_ident
 from uuid import uuid4
 from typing import Any
 
@@ -10,6 +12,7 @@ import httpx2
 import numpy
 import pytest
 from fastapi.testclient import TestClient
+from shapely.geometry import Polygon
 
 from eolab_app.main import create_app
 from eolab_app.processing.job_events import PostgresJobEvents
@@ -17,9 +20,65 @@ from eolab_app.processing.job_store import PostgresJobStore
 from app_support import mounted_geotiff_item
 from raster_fixture_support import write_source
 from raster_source_support import SOURCE
+from test_model_runs_postgres import drawing_attachment, model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import calculation_inputs, submit_calculation
 from test_polygon_summary_areas import rectangle
+
+
+def test_vector_input_accounts_for_multilingual_notes_in_utf8(
+    model_boundary: Any, store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain editor-valid notes with a model using the same compact UTF-8 size as the source document.
+
+    Args:
+        model_boundary: Real Processing model routes.
+        store: Disposable database holding the job input.
+        monkeypatch: Observe where the original polygons are validated.
+    """
+    client = model_boundary[0]
+    event_loop_thread = client.portal.call(get_ident)
+    validation_threads = set()
+
+    def observe_polygon(ring: list[tuple[float, float]]) -> Polygon:
+        """Record the validation thread and construct the real polygon from its ring."""
+        validation_threads.add(get_ident())
+        return Polygon(ring)
+
+    monkeypatch.setattr("eolab_app.editable_polygon.Polygon", observe_polygon)
+    note = "森" * 8000
+    collection = {
+        "type": "FeatureCollection",
+        "name": "Sites",
+        "features": [
+            {
+                "type": "Feature",
+                "id": str(index),
+                "properties": {"name": "Site", "note": note},
+                "geometry": rectangle(0.1, 9.1, 0.3, 9.3),
+            }
+            for index in range(200)
+        ],
+    }
+    selection, attachments = drawing_attachment(collection)
+    run = model_request(
+        client, "raster-clip",
+        inputs={"raster": SOURCE, "area": {"kind": "catalogSelection", "selection": selection}},
+    )
+    submit(client, run, attachments)
+    assert validation_threads and event_loop_thread not in validation_threads
+    with store._transaction() as cursor:
+        cursor.execute(
+            "SELECT bytes, payload FROM processing.inputs WHERE id=%s",
+            (selection["reference"]["id"],),
+        )
+        saved = cursor.fetchone()
+    assert saved["payload"] == collection
+    assert saved["bytes"] == len(
+        json.dumps(collection, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
 
 
 def test_drawn_polygon_histograms_authorize_before_serving_cached_results(

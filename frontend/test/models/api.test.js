@@ -57,6 +57,39 @@ test("submission uses the immutable request key and normal Processing mutation h
     assert.deepEqual(JSON.parse(h.calls[1].options.body), body);
 });
 
+test("pending drawing groups travel together and survive an uncertain submission", async () => {
+    const sources = [{name: "North 🐦"}, {name: "South\nmeadow"}];
+    let status = 503;
+    const posts = [];
+    const api = new ProcessingApiClient(async (url, options) => {
+        if (url.endsWith("/jobs")) return Response.json({jobs: []});
+        posts.push({url, body: options.body});
+        return Response.json(status === 202 ? job() : {detail: "Try again"}, {status});
+    }, null);
+    const members = [];
+    for (const source of sources) members.push({selection: {kind: "capturedVector", reference: await api.captureVectorInput(source)}});
+    const submission = {requestId: "x".repeat(32), model: invocation.model, inputs: {area: {members}}};
+    const ids = members.map(member => member.selection.reference.id);
+    await assert.rejects(api.submitModelRun(submission, ids), {status: 503});
+    status = 202;
+    await api.submitModelRun(submission, ids);
+    assert.equal(posts[1].url, "/api/processing/model-runs/with-inputs");
+    assert.equal(await posts[0].body.text(), await posts[1].body.text());
+    const lines = (await posts[1].body.text()).trimEnd().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(lines, [submission, members.map(member => member.selection.reference.id), ...sources]);
+    api.modelInputs.indexedDB = {open() { throw new Error("Browser input storage is unavailable"); }};
+    await api.submitModelRun(submission);
+    assert.equal(posts[2].url, "/api/processing/model-runs");
+    api.modelInputs.indexedDB = undefined;
+    members[0].selection.reference = await api.captureVectorInput(sources[0]);
+    status = 422;
+    await assert.rejects(api.submitModelRun(submission, [members[0].selection.reference.id]), {status: 422});
+    assert.equal(posts[3].url, "/api/processing/model-runs/with-inputs");
+    status = 202;
+    await api.submitModelRun(submission);
+    assert.equal(posts[4].url, "/api/processing/model-runs");
+});
+
 test("renewal uses the owned run endpoint and validates the returned job", async () => {
     const h = fixture(() => job());
     await h.api.renewModelRun(job().jobId);

@@ -57,7 +57,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 eolab_app = ["static/*", "static/**/*", "processing/recipes/*.yaml", "annotation_sessions/*.sql", "annotation_sessions/admin.*", "saved_maps/*.sql", "planning/*.sql", "drawings/*.sql"]
-eolab_jobs = ["schema.sql", "schema_check.sql", "schema_23.sql"]
+eolab_jobs = ["schema.sql", "schema_check.sql", "schema_23.sql", "schema_24.sql"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

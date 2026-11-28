@@ -40,7 +40,11 @@ from eolab_app.raster.source_models import (
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 from eolab_app.processing import model_operations
 from eolab_app.processing.operation_context import OperationContext
-from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
+from eolab_app.processing.vector_inputs import (
+    RetainedVectorSelectionReader,
+    write_captured_vector_input,
+)
+from eolab_app.source_files import finish_source_task
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -170,7 +174,12 @@ class ProcessingWorker:
 
         if areas is not None:
             areas = RetainedVectorSelectionReader(
-                areas, self.uploads, row["input_uploads"], retained_file, row.get("spatial_filter_drawings")
+                areas,
+                self.uploads,
+                row["input_uploads"],
+                retained_file,
+                row.get("spatial_filter_drawings"),
+                row.get("captured_vector_files"),
             )
 
         async def report_progress(progress: dict[str, Any]) -> None:
@@ -354,15 +363,35 @@ class ProcessingWorker:
         if model is not None:
             prepared = record_model_preparation(row, model, prepared, self.limits)
         if drawings := row.get("spatial_filter_drawings"):
-            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings})
+            prepared = replace(
+                prepared,
+                specification={
+                    **prepared.specification,
+                    "_spatialFilterDrawings": drawings,
+                },
+            )
         saved = await asyncio.to_thread(
             self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
         )
         if drawings:
-            saved["spec"] = dict(saved["spec"])
-            del saved["spec"]["_spatialFilterDrawings"]
+            saved["spec"].pop("_spatialFilterDrawings")
         row.update(saved)
         return authorized, checksum
+
+    def _materialize_input(self, job_id: str, attempt: str, input_id: str, path: Path) -> None:
+        """Read and write one input so its decoded geometry is released before the next read.
+
+        Args:
+            job_id: Claimed computation ID.
+            attempt: Token authorizing the private input read.
+            input_id: Retained drawing or boundary.
+            path: Destination GeoPackage inside the attempt directory.
+
+        Raises:
+            ProcessingError: The attempt no longer owns the input.
+            OSError: The scratch file cannot be written.
+        """
+        write_captured_vector_input(path, self.jobs.read_job_input(job_id, attempt, input_id))
 
     async def _execute(self, row: dict[str, Any]) -> Artifact:
         """Authorize the inputs, reuse or calculate values, and publish result files.
@@ -405,6 +434,19 @@ class ProcessingWorker:
         calculation = handler.parse_specification(
             model.calculation if model else row["spec"]
         )
+        directory = await asyncio.to_thread(self.artifacts.prepare, row["attempt_id"])
+        captured_files = {}
+        for index, input_id in enumerate(row.get("input_ids", ())):
+            path = directory / f"input-vector-{index}.gpkg"
+            writing = asyncio.create_task(asyncio.to_thread(
+                self._materialize_input, row["id"], row["attempt_id"], input_id, path
+            ))
+            try:
+                await asyncio.shield(writing)
+            finally:
+                await finish_source_task(writing)
+            captured_files[input_id] = path
+        row["captured_vector_files"] = captured_files
         authorized = None
         checksum = None
         if isinstance(calculation, handler.queued_type):
@@ -427,10 +469,6 @@ class ProcessingWorker:
             await self._resolve_additional_sources(row, spec, handler)
         )
         native_sources, spec = await handler.execution_inputs(context, spec, authorized)
-        directory = await asyncio.to_thread(
-            self.artifacts.prepare,
-            row["attempt_id"],
-        )
         if model is None and handler.cached is not None:
             value = await handler.cached(context, spec, directory)
             if value is not None:
@@ -638,7 +676,9 @@ class ProcessingWorker:
             return False
         if "_spatialFilterDrawings" in row["spec"]:
             spec = dict(row["spec"])
-            row = {**row, "spatial_filter_drawings": spec.pop("_spatialFilterDrawings"), "spec": spec}
+            row.update(
+                spatial_filter_drawings=spec.pop("_spatialFilterDrawings"), spec=spec
+            )
         identifier, attempt = row["id"], row["attempt_id"]
         task = asyncio.create_task(self._execute(row))
         finished = False

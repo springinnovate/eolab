@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from eolab_app.catalog_selection import CatalogSelection, VectorSelection
+from eolab_app.catalog_selection import CatalogSelection, ModelVectorSelection
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
@@ -42,10 +42,10 @@ class RasterStartingMask(HydrologySchema):
 
 
 class VectorStartingMask(HydrologySchema):
-    """Combine selected catalog or uploaded vector features into one starting mask."""
+    """Combine the selected vector features into one starting mask."""
 
     kind: Literal["catalogSelection"]
-    selection: VectorSelection
+    selection: ModelVectorSelection
 
 
 StartingMask = Annotated[

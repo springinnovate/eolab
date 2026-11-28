@@ -131,13 +131,18 @@ class JobStore(Protocol):
         """
         ...
 
-    def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
+    def save_input(
+        self,
+        owner: str,
+        checksum: str,
+        document: str,
+    ) -> str:
         """Store an owner-private JSON input and return its expiring opaque ID.
 
         Args:
             owner: Browser-session hash.
             checksum: Operation-owned content identity.
-            payload: Validated JSON to retain.
+            document: Validated compact JSON text to retain.
 
         Returns:
             Owned input identifier.
@@ -147,13 +152,16 @@ class JobStore(Protocol):
         """
         ...
 
-    def get_input(self, owner: str, identifier: str, checksum: str, *, include_geometry: bool = True) -> dict[str, Any]:
-        """Read an owned, unexpired input with the expected identity.
+    def get_input(
+        self, owner: str, identifier: str, checksum: str, media_type: str, *, include_geometry: bool = True
+    ) -> dict[str, Any]:
+        """Read an owned, unexpired input with the expected identity and format.
 
         Args:
             owner: Browser-session hash.
             identifier: Opaque retained input identifier.
             checksum: Expected content identity.
+            media_type: Format required by the reader.
             include_geometry: Return coordinates when needed by the reader.
 
         Returns:
@@ -161,6 +169,24 @@ class JobStore(Protocol):
 
         Raises:
             ProcessingError: If the input is unavailable to this owner.
+        """
+        ...
+
+    def read_job_input(
+        self, identifier: str, attempt: str, input_id: str
+    ) -> dict[str, Any]:
+        """Read one private source document held by this running attempt.
+
+        Args:
+            identifier: Claimed computation ID.
+            attempt: Current worker attempt token.
+            input_id: Identifier of the selected input.
+
+        Returns:
+            The decoded source document.
+
+        Raises:
+            ProcessingError: If the worker no longer owns these inputs.
         """
         ...
 

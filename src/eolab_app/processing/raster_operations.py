@@ -14,7 +14,7 @@ from eolab_app.bounded_vector import summary_process
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
-    VectorSelection,
+    ModelVectorSelection,
 )
 from eolab_app.sampling_box import sampling_box_bounds
 from eolab_app.processing.aggregate_models import (
@@ -464,7 +464,9 @@ def bind_clip(
     )
 
 
-def get_clip_vector_selections(request: ClipJobRequest) -> dict[str, VectorSelection]:
+def get_clip_vector_selections(
+    request: ClipJobRequest,
+) -> dict[str, ModelVectorSelection]:
     """List the original polygon inputs for authorization and source retention.
 
     Args:

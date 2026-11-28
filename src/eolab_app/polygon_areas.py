@@ -51,10 +51,16 @@ class SummaryPolygon(BaseModel):
         return self
 
 
-class PolygonSummaryInput(BaseModel):
-    """Committed, filtered polygons; names, notes and styles are not calculation inputs."""
+class CapturedPolygonBoundary(BaseModel):
+    """Preserve the original selected polygons of a model intersection, including an empty selection."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+    polygons: tuple[SummaryPolygon, ...]
+
+
+class PolygonSummaryInput(CapturedPolygonBoundary):
+    """Committed, filtered polygons; names, notes and styles are not calculation inputs."""
+
     polygons: Annotated[tuple[SummaryPolygon, ...], Field(min_length=1, max_length=500)]
 
     @model_validator(mode="after")
@@ -109,12 +115,16 @@ class PolygonSummaryInput(BaseModel):
         )
 
 
-class PolygonAreaReference(BaseModel):
-    """An expiring browser-owned input ID and the hash of its exact geometry."""
+class ProcessingInputReference(BaseModel):
+    """Identify a temporary private input by its opaque ID and content checksum."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
     sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+
+
+class PolygonAreaReference(ProcessingInputReference):
+    """Identify an expiring polygon area by its geometry checksum."""
 
 
 class PolygonAreaUploadResponse(BaseModel):
@@ -127,7 +137,7 @@ class PolygonAreaUploadResponse(BaseModel):
 
 
 async def read_polygon_area_input(
-    get_input: Callable[[str, str, str], dict[str, Any]],
+    get_input: Callable[[str, str, str, str], dict[str, Any]],
     owner: str,
     reference: PolygonAreaReference,
 ) -> PolygonSummaryInput:
@@ -136,7 +146,7 @@ async def read_polygon_area_input(
     Storage errors propagate to the caller for translation.
 
     Args:
-        get_input: Storage read that checks owner, expiry and content identity.
+        get_input: Storage read that checks owner, expiry, checksum and media type.
         owner: Server-derived browser-session hash.
         reference: Temporary input ID and expected geometry hash.
 
@@ -157,7 +167,7 @@ async def read_polygon_area_input(
             ValueError: If the stored geometry is invalid.
         """
         return PolygonSummaryInput.model_validate(
-            get_input(owner, reference.id, reference.sha256)
+            get_input(owner, reference.id, reference.sha256, "application/json")
         )
 
     return await asyncio.to_thread(load_polygons)

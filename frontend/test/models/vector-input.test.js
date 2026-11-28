@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
+import {modelVectorSources, bindModelVectorInputs} from "../../src/model-vector-sources.js";
+import {describeDrawingVectorLayer} from "../../src/annotations/summary-area.js";
+import {exportAnnotationGeoJSON} from "../../src/annotations/geojson.js";
 import {ModelsController} from "../../src/models/controller.js";
 import {ModelsView} from "../../src/models/view.js";
 import {ProcessingJobs} from "../../src/processing/jobs.js";
@@ -26,7 +29,7 @@ const predicate = {enabled: true, match: "all", rules: [{field: "region_name", o
 const allFeatures = {enabled: false, match: "all", rules: []};
 const selection = {collectionId: "vectors", itemId: "regions", assetKey: "data", layerName: "observations", filter: predicate};
 const fields = [{name: "region_name", type: "str"}, {name: "measurement", type: "float"}, {name: "year", type: "int"}];
-const source = {key: "view-1", label: "Region observations", filter: predicate, fields, scalarFields: fields,
+const source = {geometryKind: "polygon", key: "view-1", label: "Region observations", filter: predicate, fields, scalarFields: fields,
     numericFields: fields.slice(1), selection, allSelection: {...selection, filter: allFeatures}};
 
 /** Declare an example recipe using the reusable input and ordinary numeric parameters.
@@ -41,11 +44,12 @@ function recipeFor(input = definition) {
 
 /** Connect real Data tools controls to recorded Processing requests and mutable source metadata.
  * @param {Object} [recipe=recipeFor()] Installed example definition.
+ * @param {Object[]} [drawings] Committed editor targets supplied by composition.
  * @return {Object} Controller, view, composed context, API and detached submitted requests.
  */
-function setup(recipe = recipeFor()) {
+function setup(recipe = recipeFor(), drawings = []) {
     const doc = new SummaryControlDocument(), view = new ModelsView(doc), submitted = [], saved = new Map();
-    const context = {vectors: [structuredClone(source)], rasters: []};
+    const context = {vectors: [structuredClone(source), ...modelVectorSources([], drawings.map(target => describeDrawingVectorLayer(target)))], rasters: []};
     const api = {discoverModels: async () => [recipe],
         submitModelRun: async value => { submitted.push(value); return job({model: recipe}); },
         getJob: async () => job({model: recipe}), readModelInvocation: async () => ({model: {...recipe, definition: recipe},
@@ -53,6 +57,10 @@ function setup(recipe = recipeFor()) {
     const clock = {setTimeout() {}, clearTimeout() {}}, jobs = new ProcessingJobs(api, clock);
     const controller = new ModelsController({api, jobs, view, clock, getContext: () => context,
         storage: {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)},
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs, {readLayer: key => {
+            const target = drawings.find(value => value.key === key);
+            return target && exportAnnotationGeoJSON({name: target.label, polygons: target.polygons});
+        }, readBoundary: assert.fail}, collection => api.captureVectorInput(collection), acquired, isCurrent),
         prepareVector: () => { throw Error("Configured vector inputs must not preflight scan features"); },
         closeVectorFilter() {}, onOpen() {}, onClose() {}, newId: () => "d".repeat(32)});
     controller.chooseModel(recipe);
@@ -121,6 +129,68 @@ test("source-only vector inputs omit field controls and capture an empty field m
     }
 });
 
+test("layer choices follow fixed and repeated field requirements on opening and refresh", () => {
+    const textOnly = {...source, key: "text-only", numericFields: [], scalarFields: fields.slice(0, 1)};
+    const vectors = [source, textOnly];
+    for (const [input, expected] of [
+        [{type: "vector", label: "Boundary"}, vectors],
+        [{...definition, fields: {group: definition.fields.identifier}}, vectors],
+        [definition, [source]], [repeatedDefinition, [source]],
+    ]) {
+        const handler = getModelInputHandler("vector");
+        const state = handler.createDraft(input, {vectors});
+        assert.deepEqual(state.vectors.map(layer => layer.key), expected.map(layer => layer.key));
+        state.vectorKey = source.key;
+        handler.refresh(state, input, {vectors: [{...textOnly, key: source.key}]});
+        assert.equal(state.vectorKey, expected.length === 2 ? source.key : "");
+    }
+});
+
+test("a scalar role can submit either real editor text field through an ordinary vector input", async t => {
+    const drawing = {key: "drawn-sites", label: "Survey", filter: allFeatures, polygons: [
+        {id: "first", name: "North", note: "Wetland", vertices: [[0, 0], [1, 0], [0, 1]]},
+    ]};
+    for (const attribute of ["name", "note"]) {
+        const h = setup(recipeFor({...definition, fields: {identifier: definition.fields.identifier}}), [drawing]);
+        t.after(() => h.controller.destroy());
+        const captures = [], reference = {id: "d".repeat(32), sha256: "a".repeat(64)};
+        h.api.captureVectorInput = async collection => { captures.push(collection); return reference; };
+        const controls = h.view.setup.inputs.features;
+        choose(controls.source, drawing.key); choose(controls.fields.identifier, attribute);
+        await h.controller.submit();
+        assert.deepEqual(h.submitted[0].inputs.features, {selection: {kind: "capturedVector", reference, layerName: "features", filter: allFeatures}, fields: {identifier: attribute}});
+        assert.deepEqual(captures[0].features[0].properties, {name: "North", note: "Wetland"});
+        assert.equal(captures[0].features[0].id, "first");
+    }
+});
+
+test("shared drawing intersections bind once across local and file inputs and reopen without the editor", async () => {
+    const revision = {drawingLayerId: crypto.randomUUID(), revision: 1, featureIds: Array.from({length: 450}, () => crypto.randomUUID())};
+    const filter = {enabled: true, match: "all", rules: [{operator: "intersects", layerId: crypto.randomUUID(),
+        source: {kind: "drawing", polygonArea: revision, filter: predicate}}]};
+    const inputs = structuredClone({first: {selection: {kind: "localVector", key: "fields", filter}}, second: {selection: {...selection, filter}}});
+    const documents = [], released = [];
+    const capture = async document => {
+        documents.push(document);
+        return {id: String(documents.length).repeat(32), sha256: "a".repeat(64)};
+    };
+    const geometry = {type: "Polygon", coordinates: [[[0,0], [1,0], [0,1], [0,0]]]};
+    const boundary = {polygons: [geometry]};
+    await bindModelVectorInputs(inputs, {readLayer: () => ({type: "FeatureCollection", features: []}),
+        readBoundary: async saved => { assert.deepEqual(saved, revision); return structuredClone(boundary); }},
+        capture, id => released.push(id), () => true);
+    assert.equal(documents.length, 2);
+    assert.equal(released.length, 2);
+    assert.deepEqual(documents[1], boundary, "retry owns the original polygons after a revision change");
+    assert.ok(JSON.stringify(inputs).length < 16384);
+    const bound = inputs.first.selection.filter.rules[0].source;
+    assert.equal(bound.kind, "drawing");
+    assert.deepEqual(bound.filter, predicate);
+    assert.deepEqual(bound.polygonArea, inputs.second.selection.filter.rules[0].source.polygonArea);
+    assert.deepEqual(Object.keys(bound.polygonArea).sort(), ["id", "sha256"]);
+    await bindModelVectorInputs(inputs, {readLayer: assert.fail, readBoundary: assert.fail}, assert.fail, assert.fail, () => true);
+});
+
 test("multiple configured vector inputs retain independent source, field and filter choices", () => {
     const recipe = recipeFor(); recipe.inputs.reference = alternateDefinition;
     const draft = createModelDraft(recipe, {vectors: [source]}, "draft");
@@ -145,13 +215,12 @@ test("removing the chosen source clears its live choices and never selects a rep
     assert.match(h.view.setup.inputs.features.status.textContent, /Add the vector dataset/);
 });
 
-test("unavailable field kinds prevent running and identify the configured selector", t => {
+test("a source that loses a required numeric field disappears from the layer picker", t => {
     const h = setup(); t.after(() => h.controller.destroy());
     h.context.vectors[0].numericFields = [];
     h.controller.refreshMapLayers();
-    choose(h.view.setup.inputs.features.source, source.key);
+    assert.equal(h.view.setup.inputs.features.source.children.some(option => option.value === source.key), false);
     assert.equal(h.view.setup.run.disabled, true);
-    assert.match(h.view.setup.inputs.features.status.textContent, /Measured amount/);
 });
 
 test("duplicated runs preserve captured upload identity and configured roles after map changes", async t => {

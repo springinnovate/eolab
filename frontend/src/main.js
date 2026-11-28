@@ -125,6 +125,8 @@ import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
+import { modelVectorSources, bindModelVectorInputs } from "./model-vector-sources.js";
+import { eligibleVectorSources } from "./models/vector-input.js";
 import { ModelsController } from "./models/controller.js";
 import { describeRasterSource } from "./raster-source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
@@ -1006,7 +1008,7 @@ async function initializeCatalog(
             vectorFieldCalculator?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
-            polygonGroups?.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+            polygonGroups?.updateLayers(getPolygonGroupLayers());
             models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.capabilities?.statistics && layer.visible
@@ -1535,11 +1537,13 @@ async function initializeCatalog(
     /** Apply field and spatial conditions to committed drawings without disturbing the editing draft.
      * @param {string} key Drawing view to filter.
      * @param {Object} candidate Rule builder state.
-     * @param {()=>boolean} [current] Whether a source change that triggered this refresh is still current.
+     * @param {Object} [options] Source tracking and edit lifetime.
+     * @param {()=>boolean} [options.current] Whether the requested edit or source refresh is still active.
+     * @param {boolean} [options.sourcesTracked] Whether a passive refresh already recorded its source signature.
      * @return {Promise<Object|null>} Applied rules, or null after replacement or removal.
      * @throws {Error} If the polygon source cannot be read.
      */
-    async function applyDrawingFilter(key, candidate, current) {
+    async function applyDrawingFilter(key, candidate, {current, sourcesTracked = false} = {}) {
         const attempt = Symbol();
         drawingFilterAttempts.set(key, attempt);
         const layers = spatialPolygonLayers();
@@ -1555,11 +1559,33 @@ async function initializeCatalog(
         }
         const editor = annotations.filterTarget(key);
         if (!editor || drawingFilterAttempts.get(key) !== attempt || (current && !current())) return null;
-        if (spatial && !current) spatialViews.trackSources(key, captured, layers);
+        if (spatial && !sourcesTracked) spatialViews.trackSources(key, captured, layers);
         editor.apply(captured);
         return captured;
     }
     let modelFilterControls = null;
+    /** Expose the drawing owner's filter action to both Map contents and model setup.
+     * @param {string} key Map layer being edited.
+     * @param {()=>boolean} [current] Whether the inline edit is still active.
+     * @return {Object|null} The current drawing filter and its apply/cancel actions.
+     */
+    function drawingFilterTarget(key, current) {
+        const annotation = annotations?.filterTarget(key);
+        if (!annotation) return null;
+        const record = mapLayerController.getRecord(key);
+        return {...annotation,
+            filter: record?.requestedSpatialFilter ?? annotation.filter,
+            status: record?.spatialFilterError ?? annotation.status,
+            cancelPending: () => drawingFilterAttempts.delete(key),
+            apply: candidate => {
+                if (record) {
+                    delete record.requestedSpatialFilter;
+                    delete record.spatialFilterError;
+                }
+                return applyDrawingFilter(key, candidate, {current});
+            },
+        };
+    }
     /** @type {symbol} Distinguish explicit statistics-area edits from passive map-filter updates. */
     const statisticsAreaFilterIntent = Symbol("statistics-area-filter");
     vectorFilterControls = new VectorFilterControls({
@@ -1571,19 +1597,9 @@ async function initializeCatalog(
         onZoom: ([west, south, east, north]) => leafletMap.fitBounds(
             L.latLngBounds([[south, west], [north, east]]).pad(0.15), {padding: [24, 24], maxZoom: 14}),
         getTarget: (key) => {
-            const annotation = annotations?.filterTarget(key);
+            const drawing = drawingFilterTarget(key);
+            if (drawing) return drawing;
             const record = mapLayerController.getRecord(key);
-            if (annotation) return {...annotation,
-                filter: record?.requestedSpatialFilter ?? annotation.filter,
-                status: record?.spatialFilterError ?? annotation.status,
-                cancelPending: () => drawingFilterAttempts.delete(key),
-                apply: candidate => {
-                    if (record) {
-                        delete record.requestedSpatialFilter;
-                        delete record.spatialFilterError;
-                    }
-                    return applyDrawingFilter(key, candidate);
-                }};
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
                 key, label: record.entry.label,
@@ -1629,24 +1645,35 @@ async function initializeCatalog(
         const geometry = await vectorSamplingOverlay.load(area);
         if (geometry) resultLocator.setPolygon(area, geometry);
     };
-    /** Read polygon choices for Models, histogram and summary controls.
+    /** Read original vector choices for model setup and polygon analysis.
      * Visibility and WMS publication do not determine numerical selection.
      * @return {Array<{key:string,label:string,sourceOrigin:"catalog"|"upload"|"runArtifact",item:import("./vector/sampling.js").VectorSamplingSource,
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained source identities, immutable fields and applied filter snapshots.
      */
-    const getPolygonTargets = () => mapLayerController.retainedRecords
+    const getVectorTargets = () => mapLayerController.retainedRecords
         .filter(record => record.adapter === vectorMapLayerAdapter)
-        .flatMap(record => {
+        .map(record => {
             const source = record.adapter.describeSource(record);
-            return source.geometryKind === "polygon" ? [{
+            return {geometryKind: source.geometryKind,
                 key: record.entry.key, label: record.entry.label, sourceOrigin: source.origin,
                 item: source.source.kind === "runArtifact" ? source.selection : source.source,
                 fields: source.fields, scalarFields: source.scalarFields, numericFields: source.numericFields,
                 selection: source.selection, filter: record.adapter.exportFilterState(record),
-            }] : [];
+            };
         });
+    /** Return only polygons for area-based map analysis. @return {Object[]} Compatible map sources. */
+    const getPolygonTargets = () => getVectorTargets().filter(source => source.geometryKind === "polygon");
+    /** List current vector inputs with their fields, filters and committed feature counts.
+     * @return {import("./models/vector-input.js").VectorInputSource[]} Available model choices.
+     */
+    const getModelVectorSources = () => modelVectorSources(getVectorTargets(), annotations?.describeVectorLayers() ?? []);
+    /** List the layers a model can use as members of a polygon boundary group.
+     * @return {import("./map-layers/polygon-groups.js").PolygonGroupLayer[]} Eligible keys and display names.
+     */
+    const getPolygonGroupLayers = () => eligibleVectorSources({geometry: "polygon"}, getModelVectorSources())
+        .map(({key, label}) => ({key, label}));
     /** List retained source layers and committed drawings for the polygon pickers.
      * @return {Object[]} Independent vector descriptors and drawing snapshots.
      */
@@ -1739,29 +1766,24 @@ async function initializeCatalog(
             if (job.status === "deleted") mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.jobId === job.jobId);
         },
         /** Supply original-source choices and current map areas independently of rendering.
-         * @param {Object} [options] Additional input choices requested by model setup.
-         * @param {boolean} [options.includeDrawnPolygons=false] Include detached, filtered snapshots of committed polygon layers.
          * @return {Object} Original raster and vector choices, polygon groups, drawings, area and map bounds.
          */
-        getContext: ({includeDrawnPolygons = false} = {}) => {
+        getContext: () => {
             const viewport = leafletMap.getBounds();
             const layers = mapLayerController.snapshots();
             return {
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
                 temporalDatasets: temporalDatasets(layers),
-                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, sourceOrigin: target.sourceOrigin, filter: target.filter, fields: target.fields,
-                    scalarFields: target.scalarFields, numericFields: target.numericFields,
-                    selection: {...target.selection, filter: target.filter}, allSelection: {...target.selection, filter: EMPTY_VECTOR_FILTER}})),
+                vectors: getModelVectorSources(),
                 polygonGroups: polygonGroups?.snapshot() ?? [],
-                drawnPolygonLayers: includeDrawnPolygons ? (annotations?.summaryTargets() ?? []).map(target => ({
-                    key: target.key, label: target.label, total: target.polygons.length,
-                    polygons: annotationSummaryPolygons(target.polygons, target.filter),
-                })) : [],
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
         },
+        bindVectorInputs: (inputs, acquired, isCurrent) => bindModelVectorInputs(inputs,
+            {readLayer: key => annotations.exportVectorLayer(key), readBoundary: ref => annotations.exportDrawingBoundary(ref)},
+            collection => processingApi.captureVectorInput(collection), acquired, isCurrent),
         /** Read selected features without requiring a display layer.
          * @param {import("./vector/sampling.js").VectorSamplingSource & {filter:Object}} source Original vector identity and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
@@ -1775,14 +1797,19 @@ async function initializeCatalog(
          */
         editVectorFilter: request => {
             modelFilterControls?.destroy();
-            const target = {key: request.key, label: request.source.label, source: request.source,
+            const layerKey = request.source.key;
+            const edit = new AbortController();
+            const drawing = drawingFilterTarget(layerKey, () => request.isCurrent() && !edit.signal.aborted);
+            const target = drawing ?? {key: layerKey, label: request.source.label, source: request.source,
                 fields: request.source.fields ?? [], filter: request.filter};
             modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
                 getPolygonLayers: key => spatialPolygonLayers(true).filter(layer => layer.key !== key)
                     .map(({id, label, count}) => ({id, label, count})),
-                getTarget: key => key === target.key && request.isCurrent() ? target : null});
-            modelFilterControls.open(request.key, {filter: request.filter, apply: async candidate => request.apply(await spatialViews.bind(request.key, candidate)), complete: request.complete, cancel: request.cancel,
-                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
+                getTarget: key => key === layerKey && request.isCurrent() ? target : null});
+            modelFilterControls.open(layerKey, {filter: request.filter,
+                apply: drawing?.apply ?? (async candidate => request.apply(await spatialViews.bind(layerKey, candidate))),
+                complete: request.complete, cancel: () => { edit.abort(); request.cancel(); },
+                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: () => { edit.abort(); request.close(); },
                 help: "Change the filter for this map item and every tool input using it. Create a copy to use a different filter.",
             });
         },
@@ -1809,7 +1836,7 @@ async function initializeCatalog(
             storage: new SavedMapViewLocalStorage(undefined, "eolab.polygon-groups.v1"),
             onChange: () => models.refreshMapLayers(),
         });
-        polygonGroups.updateLayers(getPolygonTargets().map(({key, label}) => ({key, label})));
+        polygonGroups.updateLayers(getPolygonGroupLayers());
     }
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();
@@ -1829,7 +1856,7 @@ async function initializeCatalog(
                 try {
                     if (drawing) {
                         delete record.spatialFilterError;
-                        await applyDrawingFilter(key, requested, current);
+                        await applyDrawingFilter(key, requested, {current, sourcesTracked: true});
                     } else {
                         const captured = await spatialViews.bind(key, requested);
                         if (!current() || !mapLayerController.getRecord(key)) return;

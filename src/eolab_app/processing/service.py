@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+from pydantic import TypeAdapter
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
 from eolab_app.processing.shared_calculations import (
@@ -17,7 +18,9 @@ from eolab_app.processing.shared_calculations import (
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
     ArtifactDownload,
+    JobInputDocument,
     JobInputFile,
+    JobInputReference,
     JobSubmission,
     ProcessingError,
     PreparedJobPlan,
@@ -50,6 +53,10 @@ from eolab_app.processing.ports import (
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.vector_input_models import (
+    bind_saved_drawing_filters,
+    private_vector_input,
+)
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
@@ -95,16 +102,23 @@ from eolab_app.processing.model_yaml import (
 from eolab_app.source_files import ResolvedSourceFile, finish_source_task
 from eolab_app.catalog_selection import (
     ArtifactVectorSelection,
+    CapturedVectorSelection,
     CatalogSelectionReader,
     SelectionUnavailableError,
     UploadedSelection,
-    VectorSelection,
+    ModelVectorSelection,
     DrawingReference,
     DrawingSelection,
+    SavedDrawingReference,
     referenced_layers,
 )
 from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 from eolab_app.upload_storage import UploadStorage, UploadRecord, UploadError
+
+ReceiveModelInputs = Callable[
+    [dict[str, JobInputReference]], Awaitable[tuple[JobInputDocument, ...]]
+]
+"""Read the attachments for the private source IDs declared by a model invocation."""
 
 HABITAT_PREPARATION_OPERATIONS = (
     HABITAT_PREPARATION_OPERATION,
@@ -768,7 +782,12 @@ class ProcessingService:
         )
 
     async def submit_model_run(
-        self, owner: str, request: ModelRunRequest, upload_owner: str | None = None
+        self,
+        owner: str,
+        request: ModelRunRequest,
+        upload_owner: str | None = None,
+        *,
+        receive_inputs: ReceiveModelInputs | None = None,
     ) -> dict[str, Any]:
         """Start a model run, or recover a previously accepted submission.
 
@@ -783,6 +802,8 @@ class ProcessingService:
             owner: Hash of the requesting browser's Processing session cookie.
             request: The chosen model, input datasets, area, parameters and run label.
             upload_owner: Separate browser identity authorizing uploaded originals.
+            receive_inputs: Receive any attached documents for the model's declared
+                private inputs after validating the recipe and its raster sources.
 
         Returns:
             The newly queued run, or the original run for an unchanged retry.
@@ -794,9 +815,38 @@ class ProcessingService:
         """
         request_data = request.model_dump(mode="json", exclude={"requestId"})
         request_hash = hashlib.sha256(encode_canonical_json(request_data)).hexdigest()
-        existing = await asyncio.to_thread(
-            self.jobs.find_request, owner, request.requestId
-        )
+        existing = await self._accepted_model_run(owner, request.requestId, request_hash)
+        if existing is not None:
+            return existing
+        try:
+            return await self._admit_model_run(
+                owner, request.model_copy(update={"inputs": request_data["inputs"]}),
+                request_hash, upload_owner, receive_inputs,
+            )
+        except Exception:
+            # A concurrent copy can commit while this request is still reading a source.
+            existing = await self._accepted_model_run(owner, request.requestId, request_hash)
+            if existing is not None:
+                return existing
+            raise
+
+    async def _accepted_model_run(
+        self, owner: str, request_id: str, request_hash: str
+    ) -> dict[str, Any] | None:
+        """Recover an accepted job for this session and these exact submitted inputs.
+
+        Args:
+            owner: Processing session identity.
+            request_id: Client's retry identifier.
+            request_hash: Checksum of the submitted invocation.
+
+        Returns:
+            Public job details, or None if the request has not committed.
+
+        Raises:
+            ProcessingError: The request ID belongs to different work or inputs.
+        """
+        existing = await asyncio.to_thread(self.jobs.find_request, owner, request_id)
         if existing is not None:
             require_operation(existing, MODEL_OPERATION)
             if existing["request_hash"] != request_hash:
@@ -806,9 +856,30 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        calculation, invocation = build_model_calculation_request(
-            request, self.model_registry
-        )
+        return None
+
+    async def _admit_model_run(
+        self, owner: str, request: ModelRunRequest, request_hash: str,
+        upload_owner: str | None, receive_inputs: ReceiveModelInputs | None,
+    ) -> dict[str, Any]:
+        """Prepare the selected sources and atomically retain them with the new job.
+
+        Args:
+            owner: Processing session identity.
+            request: Invocation with detached inputs for binding private sources.
+            request_hash: Identity of the request before binding sources.
+            upload_owner: Session authorized to use the uploaded originals.
+            receive_inputs: Reader for any attached drawing documents.
+
+        Returns:
+            Public job details after admission commits.
+
+        Raises:
+            ProcessingError: The invocation or its sources cannot be admitted.
+            RasterFeatureError: A raster cannot be authorized.
+        """
+        saved_filters = bind_saved_drawing_filters(request.inputs)
+        calculation, invocation = build_model_calculation_request(request, self.model_registry)
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         timing_work = None
         if operation.before_queue is not None:
@@ -889,12 +960,34 @@ class ProcessingService:
         prepared = replace(
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
         )
+        selections = operation.vector_selections(calculation)
+        if saved_filters or receive_inputs is not None:
+            references = {
+                reference.id: reference
+                for selection in selections.values()
+                for source in (selection, *referenced_layers(selection.filter))
+                if (reference := private_vector_input(source)) is not None
+            }
+            documents = (
+                list(await receive_inputs(references))
+                if receive_inputs is not None
+                else []
+            )
+            for key, saved_filter in saved_filters.items():
+                if key in references:
+                    documents.append(
+                        JobInputDocument(
+                            references[key],
+                            await self.capture_filter_polygons(owner, saved_filter),
+                        )
+                    )
+            prepared = replace(prepared, input_documents=tuple(documents))
         row = await self._submit_job(
             owner,
             request.requestId,
             prepared,
             request_hash,
-            operation.vector_selections(calculation),
+            selections,
             upload_owner,
             tuple(
                 reference
@@ -973,7 +1066,7 @@ class ProcessingService:
         request_key: str,
         prepared: PreparedJobPlan,
         request_hash: str,
-        selections: dict[str, VectorSelection],
+        selections: dict[str, ModelVectorSelection],
         upload_owner: str | None,
         raster_sources: tuple[
             RasterAnalysisSourceReference | TemporalIntervalSelection, ...
@@ -1003,9 +1096,7 @@ class ProcessingService:
             for selection in selections.values()
             for source in (selection, *referenced_layers(selection.filter))
         ):
-            prepared = await self._capture_vector_result_inputs(
-                owner, prepared, selections
-            )
+            prepared = await self._retain_vector_inputs(owner, prepared, selections)
             return await asyncio.to_thread(
                 self.jobs.submit, owner, request_key, prepared, request_hash
             )
@@ -1021,13 +1112,38 @@ class ProcessingService:
             raise result
         return result
 
-    async def _capture_vector_result_inputs(
+    async def capture_filter_polygons(
+        self, owner: str, saved: SavedDrawingReference
+    ) -> bytes:
+        """Read an editor revision once and encode its selected polygons for the job.
+
+        Args:
+            owner: Browser's Processing session identity.
+            saved: Exact linked drawing revision and selected feature IDs.
+
+        Returns:
+            A private JSON document containing the accepted WGS84 polygons in source order.
+
+        Raises:
+            ProcessingError: If the editor cannot supply the requested revision or features.
+        """
+        if self.read_filter_drawing is None:
+            raise ProcessingError(
+                "drawing_unavailable", "The selected drawing is unavailable.", 409
+            )
+        polygons = await self.read_filter_drawing(owner, saved)
+        encoded = await asyncio.to_thread(
+            TypeAdapter(tuple[SummaryPolygon, ...]).dump_json, polygons
+        )
+        return b'{"polygons":' + encoded + b"}"
+
+    async def _retain_vector_inputs(
         self,
         owner: str,
         prepared: PreparedJobPlan,
-        selections: dict[str, VectorSelection],
+        selections: dict[str, ModelVectorSelection],
     ) -> PreparedJobPlan:
-        """Retain each original vector result used by an accepted calculation.
+        """Capture private features and retain result files referenced by the calculation.
 
         Args:
             owner: Browser's Processing session identity.
@@ -1044,8 +1160,13 @@ class ProcessingService:
         files = list(prepared.input_files)
         captured = {(file.run_id, file.artifact_id) for file in files}
         drawings = {}
+        references = set(prepared.input_references)
         sources = [source for selection in selections.values() for source in (selection, *referenced_layers(selection.filter))]
         for selection in sources:
+            reference = private_vector_input(selection)
+            if reference is not None:
+                references.add(reference)
+                continue
             if isinstance(selection, DrawingSelection) and selection.polygonArea:
                 drawing = selection.polygonArea
                 key = drawing.model_dump_json()
@@ -1075,10 +1196,22 @@ class ProcessingService:
             files.append(file)
             captured.add(identity)
         if drawings:
-            prepared = replace(prepared, specification={**prepared.specification, "_spatialFilterDrawings": drawings}, work_key=None)
+            prepared = replace(
+                prepared,
+                specification={
+                    **prepared.specification,
+                    "_spatialFilterDrawings": drawings,
+                },
+                work_key=None,
+            )
         return (
-            replace(prepared, input_files=tuple(files), work_key=None)
-            if len(files) != len(prepared.input_files)
+            replace(
+                prepared,
+                input_files=tuple(files),
+                input_references=tuple(references),
+                work_key=None,
+            )
+            if references or len(files) != len(prepared.input_files)
             else prepared
         )
 
@@ -1086,7 +1219,7 @@ class ProcessingService:
         self,
         owner: str,
         submissions: list[JobSubmission],
-        selections: list[dict[str, VectorSelection]],
+        selections: list[dict[str, ModelVectorSelection]],
         upload_owner: str | None,
         raster_sources: list[
             tuple[RasterAnalysisSourceReference | TemporalIntervalSelection, ...]
@@ -1136,7 +1269,7 @@ class ProcessingService:
                 prepared = submission.prepared
                 if isinstance(prepared, PreparedJobPlan):
                     try:
-                        prepared = await self._capture_vector_result_inputs(
+                        prepared = await self._retain_vector_inputs(
                             owner, prepared, inputs
                         )
                     except ProcessingError as error:
@@ -1451,7 +1584,7 @@ class ProcessingService:
         """
         checksum = polygons.geometry_hash()
         identifier = await asyncio.to_thread(
-            self.jobs.save_input, owner, checksum, polygons.model_dump(mode="json")
+            self.jobs.save_input, owner, checksum, polygons.model_dump_json()
         )
         return {
             "polygonArea": {"id": identifier, "sha256": checksum},
@@ -1706,7 +1839,15 @@ class ProcessingService:
             for sources in raster_sources
             for source in sources
         ) or any(
-            isinstance(source, (UploadedSelection, ArtifactVectorSelection, DrawingSelection))
+            isinstance(
+                source,
+                (
+                    UploadedSelection,
+                    ArtifactVectorSelection,
+                    CapturedVectorSelection,
+                    DrawingSelection,
+                ),
+            )
             for inputs in selections
             for selection in inputs.values()
             for source in (selection, *referenced_layers(selection.filter))

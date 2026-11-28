@@ -1,6 +1,6 @@
 """Strict single-raster calculation plans and operation-specific result values."""
 
-from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection, ModelVectorSelection
 from dataclasses import dataclass, field, fields
 from typing import Annotated, Any, Literal, Self
 
@@ -121,7 +121,7 @@ class AggregatePlanRequest(BaseModel):
     ]
     selectedBounds: Wgs84Bounds | None = None
     samplingBox: Wgs84SamplingBox | None = None
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
     targetChunkPixels: ChunkPixels | None = None
@@ -221,7 +221,7 @@ class AggregateArea(BaseModel):
     samplingBox: Wgs84SamplingBox | None = None
     geometryHash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     geometries: tuple[dict[str, object], ...] = ()
-    catalogSelection: VectorSelection | None = None
+    catalogSelection: ModelVectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")

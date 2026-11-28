@@ -1,4 +1,6 @@
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
+import {modelVectorSources} from "../../src/model-vector-sources.js";
+import {eligibleVectorSources} from "../../src/models/vector-input.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
@@ -164,20 +166,31 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
     const record = {adapter, entry: {key: "processed-view", label: "Processed regions", visible: false},
         state: {source, style: {geometryKind: "polygon"}, filter: predicate,
             labelFields: [{name: "score", type: "float"}, {name: "Doubled", type: "float"}]}};
-    const layers = {retainedRecords: [record], snapshots: () => []};
+    const line = {...record, entry: {key: "river", label: "River"},
+        state: {...record.state, style: {geometryKind: "line"}}};
+    const layers = {retainedRecords: [record, line], snapshots: () => []};
+    const drawing = {key: "local:annotation:sites", label: "Drawn sites", filter: EMPTY_VECTOR_FILTER,
+        featureCounts: {matched: 1, total: 1}};
+    const annotations = {describeVectorLayers: () => [drawing],
+        summaryTargets: () => { throw new Error("Model setup copied drawing coordinates"); }};
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
-    const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
-    const {getPolygonTargets, createPolygonSamplingArea} = new Function(
-        "mapLayerController", "vectorMapLayerAdapter", "createVectorSamplingArea",
-        `${targetsSource}; return {getPolygonTargets, createPolygonSamplingArea};`
-    )(layers, adapter, createVectorSamplingArea);
-    const modelOptionsSource = main.slice(main.indexOf("getContext: ({includeDrawnPolygons"),
+    const targetsSource = main.slice(main.indexOf("const getVectorTargets ="), main.indexOf("models = new ModelsController({"));
+    const modelOptionsSource = main.slice(main.indexOf("getContext: () => {", main.indexOf("models = new ModelsController({")),
         main.indexOf("/** Open the existing rule editor inside setup"));
-    const modelOptions = new Function("getPolygonTargets", "mapLayerController", "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", `
+    const groupUpdates = main.match(/polygonGroups\??\.updateLayers\([^;]+\);/g);
+    const choices = [];
+    const groups = {updateLayers: members => choices.push(members), snapshot: () => []};
+    const {modelOptions, getPolygonTargets, createPolygonSamplingArea} = new Function(
+        "vectorMapLayerAdapter", "modelVectorSources", "eligibleVectorSources", "mapLayerController",
+        "createVectorSamplingArea", "EMPTY_VECTOR_FILTER", "annotations", "polygonGroups", `
         const leafletMap = {getBounds: () => ({getWest: () => -1, getSouth: () => -1, getEast: () => 1, getNorth: () => 1})};
-        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "", polygonGroups = null;
-        return {${modelOptionsSource}};
-    `)(getPolygonTargets, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER);
+        const temporalDatasets = () => [], modelArea = null, modelAreaDescription = "";
+        ${targetsSource}
+        ${groupUpdates.join("\n")}
+        return {modelOptions: {${modelOptionsSource}}, getPolygonTargets, createPolygonSamplingArea};
+    `)(adapter, modelVectorSources, eligibleVectorSources, layers, createVectorSamplingArea, EMPTY_VECTOR_FILTER, annotations, groups);
+    const expectedMembers = [record.entry, drawing].map(({key, label}) => ({key, label}));
+    assert.deepEqual(choices, [expectedMembers, expectedMembers], "group creation and map changes offer all eligible polygon layers");
     const requests = [];
     t.mock.method(globalThis, "fetch", async (url, options) => {
         requests.push({url, options});
@@ -186,6 +199,7 @@ test("run-result polygon pickers and Models retain the native layer, formulas an
     const target = getPolygonTargets()[0], signal = new AbortController().signal;
     const pickerArea = await createPolygonSamplingArea(target.item, target.filter, signal, target);
     const modelSource = modelOptions.getContext().vectors[0];
+    assert.deepEqual(modelSource.originLabels, {group: "Completed runs", label: "Completed run"});
     const modelArea = await modelOptions.prepareVector(modelSource, signal);
     assert.deepEqual(pickerArea.selection, selection);
     assert.deepEqual(modelArea.selection, selection);

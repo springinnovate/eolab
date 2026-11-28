@@ -5,6 +5,7 @@ import { normalizeCalculationArea } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./calculation-session.js";
 import { csvParse } from "d3";
 import { rasterSourceReference } from "../raster-source.js";
+import { PendingModelInputs } from "./model-inputs.js";
 
 /** A prepared Earth Engine dataset offered in Ecosystem Condition setup.
  * @typedef {Object} HabitatDatasetSource
@@ -249,6 +250,7 @@ export class ProcessingApiClient {
         this.eventListeners = new Set();
         this.eventStream = null;
         this.pendingCalculations = [];
+        this.modelInputs = new PendingModelInputs();
     }
 
     /** Share one event stream for planning and job observers after cookie setup.
@@ -356,6 +358,25 @@ export class ProcessingApiClient {
     async validateCalculation(calculations, signal) {
         await this.ensureSession();
         return this.request("/raster-calculations/validate", "POST", { alias: "a", calculations }, signal);
+    }
+
+    /** Keep the selected source on this device until model admission settles.
+     * @param {Object} collection Committed drawing document to send with the model.
+     * @return {Promise<{id:string,sha256:string}>} Identity and checksum of the exact request bytes.
+     * @throws {Error} If device storage cannot retain the drawing.
+     */
+    async captureVectorInput(collection) {
+        return this.modelInputs.capture(collection);
+    }
+
+    /** Release a pending drawing on this device after abandoning a run.
+     * @param {string} id Private input ID returned by captureVectorInput.
+     * @return {Promise<Object>} Idempotent deletion acknowledgement.
+     * @throws {Error} If deletion fails.
+     */
+    async discardVectorInput(id) {
+        await this.modelInputs.discard(validateProcessingId(id));
+        return {deleted: true};
     }
 
     /** Upload exact polygons once and receive a private, expiring calculation reference.
@@ -530,12 +551,14 @@ export class ProcessingApiClient {
 
     /** Submit the captured setup with the same request ID on every retry.
      * @param {Object} submission Model identity, inputs, parameters, label and request ID.
+     * @param {string[]} [attachmentIds] Device-owned attachments recorded with the pending request.
      * @return {Promise<Object>} Accepted job status.
      * @throws {ProcessingRequestError|Error} If admission fails or the reply is invalid.
      */
-    async submitModelRun(submission) {
+    async submitModelRun(submission, attachmentIds = []) {
         await this.ensureSession();
-        const job = validateJob(await this.request("/model-runs", "POST", submission));
+        const body = await this.modelInputs.forSubmission(submission, attachmentIds);
+        const job = validateJob(await this.request(body instanceof Blob ? "/model-runs/with-inputs" : "/model-runs", "POST", body));
         if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
         return job;
     }
@@ -690,9 +713,9 @@ export class ProcessingApiClient {
             headers: {
                 Accept: "application/json",
                 ...(method === "GET" ? {} : { "X-EOLab-Processing": "1" }),
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+                ...(body === undefined ? {} : { "Content-Type": body instanceof Blob ? body.type : "application/json" }),
             },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            ...(body === undefined ? {} : { body: body instanceof Blob ? body : JSON.stringify(body) }),
         });
         const data = await response.json().catch(() => null);
         if (!response.ok) {
