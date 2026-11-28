@@ -65,6 +65,7 @@ def claim_next_job(
     worker_count: int,
     lease_seconds: int,
     supported_operations: list[str] | None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Claim a compatible job for the next session under the shared worker limit.
 
@@ -78,6 +79,9 @@ def claim_next_job(
         lease_seconds: Initial lease duration measured from the recorded start.
         supported_operations: Operation IDs this worker can execute. An empty list
             claims nothing. None selects across all operations.
+        attempt_id: Fresh execution token chosen by the worker before this call so
+            it can identify a committed claim if the reply is lost. When omitted,
+            the scheduler generates the token.
 
     Returns:
         The running job row with its selected owner and new attempt ID, or None
@@ -94,7 +98,7 @@ def claim_next_job(
         cursor.execute(
             _CLAIM_NEXT_JOB_SQL,
             {
-                "attempt_id": uuid4().hex,
+                "attempt_id": uuid4().hex if attempt_id is None else attempt_id,
                 "lease_seconds": lease_seconds,
                 "supported_operations": supported_operations,
             },
